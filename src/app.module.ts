@@ -22,6 +22,8 @@ import { ProveedoresModule } from './modules/proveedores/proveedores.module';
 
 import { AuditoriaModule } from './modules/auditoria/auditoria.module';
 import { LotesModule } from './modules/lotes/lotes.module';
+import { MetricasModule } from './modules/metricas/metricas.module';
+import { ConfiguracionModule } from './modules/configuracion/configuracion.module';
 
 @Module({
   imports: [
@@ -42,6 +44,8 @@ import { LotesModule } from './modules/lotes/lotes.module';
     ClientesModule,
     ProveedoresModule,
     LotesModule,
+    MetricasModule,
+    ConfiguracionModule,
     // acá vamos a ir agregando módulos
   ],
   providers: [

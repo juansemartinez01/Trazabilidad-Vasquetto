@@ -8,6 +8,9 @@ import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
 import { StockMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
 import { MetricasService } from './metricas.service';
 import { MetricasController } from './metricas.controller';
+import { ConfiguracionModule } from '../configuracion/configuracion.module';
+import { ConfiguracionOperativa } from '../configuracion/entities/configuracion-operativa.entity';
+import { StockMinimoMP } from '../configuracion/entities/stock-minimo-mp.entity';
 
 
 @Module({
@@ -19,7 +22,10 @@ import { MetricasController } from './metricas.controller';
       EntregaItem,
       StockMovimiento,
       MateriaPrima,
+      ConfiguracionOperativa,
+      StockMinimoMP,
     ]),
+    ConfiguracionModule,
   ],
   providers: [MetricasService],
   controllers: [MetricasController],

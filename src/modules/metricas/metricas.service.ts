@@ -15,6 +15,8 @@ import {
 } from '../stock-movimiento/entities/stock-movimiento.entity';
 import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
 import { DashboardMetricsDto } from './dto/dashboard-metrics.dto';
+import { StockMinimoMP } from '../configuracion/entities/stock-minimo-mp.entity';
+import { ConfiguracionOperativa } from '../configuracion/entities/configuracion-operativa.entity';
 
 @Injectable()
 export class MetricasService {
@@ -31,6 +33,8 @@ export class MetricasService {
     private movRepo: Repository<StockMovimiento>,
     @InjectRepository(MateriaPrima)
     private mpRepo: Repository<MateriaPrima>,
+    @InjectRepository(ConfiguracionOperativa)
+    private configRepo: Repository<ConfiguracionOperativa>,
   ) {}
 
   private parseRange(dto: DashboardMetricsDto) {
@@ -210,17 +214,21 @@ export class MetricasService {
   }
 
   /** ============================
-   * ALERTAS (corregidas)
+   * ALERTAS GLOBALES
    ============================ */
   async alertasGlobales(tenantId: string) {
+    // 1) cargar config (con fallback)
+    const cfg = await this.configRepo.findOne({ where: { tenantId } });
+    const dias = Number(cfg?.diasProximoVencimiento ?? 30);
+
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0);
 
-    const limite = new Date();
-    limite.setDate(hoy.getDate() + 30);
+    const limite = new Date(hoy);
+    limite.setDate(hoy.getDate() + dias);
     limite.setHours(23, 59, 59, 999);
 
-    // MP próximas a vencer
+    // 2) MP próximas a vencer
     const mpProximas = await this.loteMPRepo
       .createQueryBuilder('l')
       .where('l.tenantId = :tenantId', { tenantId })
@@ -228,7 +236,7 @@ export class MetricasService {
       .orderBy('l.fechaVencimiento', 'ASC')
       .getMany();
 
-    // PF próximas a vencer (✅ usando fechaVencimiento)
+    // 3) PF próximas a vencer
     const pfProximas = await this.lotePFRepo
       .createQueryBuilder('pf')
       .where('pf.tenantId = :tenantId', { tenantId })
@@ -237,17 +245,40 @@ export class MetricasService {
       .orderBy('pf.fechaVencimiento', 'ASC')
       .getMany();
 
-    // Stock mínimo (si tu entidad MateriaPrima tiene esos campos)
-    const stockBajo = await this.mpRepo
-      .createQueryBuilder('mp')
-      .where('mp.tenantId = :tenantId', { tenantId })
-      .andWhere('mp.stockActualKg < mp.stockMinKg')
-      .getMany();
+    // 4) Stock bajo por MP (sum lotes vs mínimo configurado)
+    const stockBajo = await this.loteMPRepo
+      .createQueryBuilder('l')
+      .leftJoin('l.materiaPrima', 'mp')
+      .leftJoin(
+        StockMinimoMP,
+        'min',
+        'min.tenant_id = :tenantId AND min.materia_prima_id = mp.id',
+        { tenantId },
+      )
+      .select('mp.id', 'materiaPrimaId')
+      .addSelect('mp.nombre', 'materiaPrima')
+      .addSelect('COALESCE(SUM(l.cantidadActualKg), 0)', 'stockActualKg')
+      .addSelect('COALESCE(min.stock_min_kg, 0)', 'stockMinKg')
+      .where('l.tenantId = :tenantId', { tenantId })
+      .groupBy('mp.id')
+      .addGroupBy('mp.nombre')
+      .addGroupBy('min.stock_min_kg')
+      .having(
+        'COALESCE(SUM(l.cantidadActualKg),0) < COALESCE(min.stock_min_kg,0)',
+      )
+      .orderBy('COALESCE(SUM(l.cantidadActualKg),0)', 'ASC')
+      .getRawMany();
 
     return {
+      diasProximoVencimiento: dias,
       mpProximasAVencer: mpProximas,
       pfProximasAVencer: pfProximas,
-      stockBajo,
+      stockBajo: stockBajo.map((x) => ({
+        materiaPrimaId: x.materiaprimaid,
+        materiaPrima: x.materiaprima,
+        stockActualKg: Number(x.stockactualkg),
+        stockMinKg: Number(x.stockminkg),
+      })),
     };
   }
 }

@@ -108,9 +108,29 @@ export class StockService {
     const lote = await this.loteRepo.findOne({
       where: { id: loteId, tenantId },
     });
-    if (!lote) throw new NotFoundException('Lote no encontrado');
 
-    lote.cantidadActualKg += Number(cantidadAjuste);
+    if (!lote) {
+      throw new NotFoundException('Lote no encontrado');
+    }
+
+    // Siempre castear a número porque viene como string desde la DB (decimal)
+    const actual = Number(lote.cantidadActualKg ?? 0);
+    const ajuste = Number(cantidadAjuste);
+
+    if (Number.isNaN(ajuste)) {
+      throw new BadRequestException('cantidadAjuste debe ser numérico');
+    }
+
+    const nuevoValor = actual + ajuste;
+
+    // Opcional, por si no querés que quede negativo
+    if (nuevoValor < 0) {
+      throw new BadRequestException(
+        `El ajuste dejaría el lote con stock negativo (actual: ${actual}, ajuste: ${ajuste})`,
+      );
+    }
+
+    lote.cantidadActualKg = nuevoValor;
     await this.loteRepo.save(lote);
 
     await this.movRepo.save(
@@ -119,7 +139,7 @@ export class StockService {
         tipo: TipoMovimiento.AJUSTE,
         loteMP: lote,
         deposito: lote.deposito,
-        cantidadKg: cantidadAjuste,
+        cantidadKg: ajuste,
         referenciaId: motivo,
       }),
     );
@@ -131,6 +151,9 @@ export class StockService {
    *  SELECCIÓN FEFO
    ======================= */
 
+  /** ======================
+ *  SELECCIÓN FEFO (ESTRICTO: NO CONSUMIR VENCIDOS)
+ ======================= */
   async obtenerLotesFEFO(
     tenantId: string,
     materiaPrimaId: string,
@@ -144,13 +167,25 @@ export class StockService {
       order: { fechaVencimiento: 'ASC' },
     });
 
+    // Normalizamos "hoy" sin hora para comparar solo fechas
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
     const seleccionados: Array<{ lote: LoteMP; cantidad: number }> = [];
-    let restante = cantidadNecesaria;
+    let restante = Number(cantidadNecesaria);
 
+    // ✅ FEFO estricto: ignorar vencidos
     for (const lote of lotes) {
-      if (lote.cantidadActualKg <= 0) continue;
+      const stock = Number(lote.cantidadActualKg ?? 0);
+      if (stock <= 0) continue;
 
-      const usar = Math.min(restante, Number(lote.cantidadActualKg));
+      const vto = new Date(lote.fechaVencimiento);
+      vto.setHours(0, 0, 0, 0);
+
+      // 🔒 SI ESTÁ VENCIDO -> IGNORAR
+      if (vto < hoy) continue;
+
+      const usar = Math.min(restante, stock);
 
       seleccionados.push({
         lote,
@@ -163,7 +198,10 @@ export class StockService {
     }
 
     if (restante > 0) {
-      throw new BadRequestException('Stock insuficiente aplicando FEFO');
+      // 🔥 Error claro: no alcanza sin vencidos
+      throw new BadRequestException(
+        `Stock insuficiente sin usar lotes vencidos (faltan ${restante} kg)`,
+      );
     }
 
     return seleccionados;
@@ -257,6 +295,102 @@ export class StockService {
         deposito: lote.deposito,
         cantidadKg: -cantidad,
         referenciaId,
+      }),
+    );
+
+    return lote;
+  }
+
+  // StockService
+
+  async registrarMermaMP(
+    tenantId: string,
+    loteId: string,
+    dto: {
+      cantidadKg: number;
+      motivo: string;
+      responsableId?: string;
+      evidencia?: any;
+    },
+  ) {
+    // merma = ajuste negativo
+    const ajuste = -Math.abs(Number(dto.cantidadKg));
+    if (Number.isNaN(ajuste))
+      throw new BadRequestException('cantidadKg debe ser numérico');
+
+    const lote = await this.loteRepo.findOne({
+      where: { id: loteId, tenantId },
+    });
+    if (!lote) throw new NotFoundException('Lote no encontrado');
+
+    const actual = Number(lote.cantidadActualKg ?? 0);
+    const nuevoValor = actual + ajuste;
+
+    if (nuevoValor < 0) {
+      throw new BadRequestException(
+        `La merma dejaría el lote con stock negativo (actual: ${actual}, merma: ${Math.abs(ajuste)})`,
+      );
+    }
+
+    lote.cantidadActualKg = nuevoValor;
+    await this.loteRepo.save(lote);
+
+    await this.movRepo.save(
+      this.movRepo.create({
+        tenantId,
+        tipo: TipoMovimiento.MERMA_MP,
+        loteMP: lote,
+        deposito: lote.deposito,
+        cantidadKg: ajuste, // negativo ✅
+        referenciaId: 'MERMA_MP', // si querés mantenerlo
+        motivo: dto.motivo,
+        responsableId: dto.responsableId,
+        evidencia: dto.evidencia,
+      }),
+    );
+
+    return lote;
+  }
+
+  async registrarMermaPF(
+    tenantId: string,
+    lotePFId: string,
+    dto: {
+      cantidadKg: number;
+      motivo: string;
+      responsableId?: string;
+      evidencia?: any;
+    },
+  ) {
+    const cantidad = Math.abs(Number(dto.cantidadKg));
+    if (Number.isNaN(cantidad))
+      throw new BadRequestException('cantidadKg debe ser numérico');
+
+    const lote = await this.lotePFRepo.findOne({
+      where: { id: lotePFId, tenantId },
+    });
+    if (!lote) throw new NotFoundException('Lote PF no encontrado');
+
+    if (Number(lote.cantidadActualKg) < cantidad) {
+      throw new BadRequestException(
+        `Stock insuficiente en lote PF ${lote.codigoLote}`,
+      );
+    }
+
+    lote.cantidadActualKg = Number(lote.cantidadActualKg) - cantidad;
+    await this.lotePFRepo.save(lote);
+
+    await this.movRepo.save(
+      this.movRepo.create({
+        tenantId,
+        tipo: TipoMovimiento.MERMA_PF,
+        lotePF: lote,
+        deposito: lote.deposito,
+        cantidadKg: -cantidad, // negativo ✅
+        referenciaId: 'MERMA_PF',
+        motivo: dto.motivo,
+        responsableId: dto.responsableId,
+        evidencia: dto.evidencia,
       }),
     );
 

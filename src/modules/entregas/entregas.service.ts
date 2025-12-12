@@ -8,7 +8,7 @@ import { Repository } from 'typeorm';
 import { Entrega } from './entities/entrega.entity';
 import { EntregaItem } from './entities/entrega-item.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
-import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
+import { LotePfEstado, LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
 import { Deposito } from '../deposito/entities/deposito.entity';
 import { StockService } from '../stock-movimiento/stock.service';
 import { TipoMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
@@ -48,64 +48,74 @@ export class EntregasService {
     await this.entregaRepo.save(entrega);
 
     for (const item of dto.items) {
-      const lote = await this.loteRepo.findOne({
-        where: { id: item.loteId, tenantId },
-      });
-      if (!lote) throw new NotFoundException('Lote no encontrado');
+  const lote = await this.loteRepo.findOne({
+    where: { id: item.loteId, tenantId },
+  });
+  if (!lote) throw new NotFoundException('Lote no encontrado');
 
-      // Validar vencimiento
-      // Validar vencimiento SOLO si el lote tiene fechaVencimiento cargada
-      if (lote.fechaVencimiento) {
-        const hoy = new Date();
-        const vencimiento = new Date(lote.fechaVencimiento);
+  // 1) Si está vencido => setear VENCIDO y bloquear
+  if (lote.fechaVencimiento) {
+    const hoy = new Date();
+    const vencimiento = new Date(lote.fechaVencimiento);
+    hoy.setHours(0, 0, 0, 0);
+    vencimiento.setHours(0, 0, 0, 0);
 
-        // para evitar tema de horas, nos quedamos solo con fecha
-        hoy.setHours(0, 0, 0, 0);
-        vencimiento.setHours(0, 0, 0, 0);
-
-        if (vencimiento < hoy) {
-          throw new BadRequestException(
-            `El lote ${lote.codigoLote} está vencido`,
-          );
-        }
+    if (vencimiento < hoy) {
+      if (lote.estado !== LotePfEstado.VENCIDO) {
+        lote.estado = LotePfEstado.VENCIDO;
+        lote.motivoEstado = 'Vencido al intentar entregar';
+        lote.fechaEstado = new Date();
+        await this.loteRepo.save(lote);
       }
-
-      // Validar stock
-      if (lote.cantidadActualKg < item.cantidadKg) {
-        throw new BadRequestException(
-          `Stock insuficiente en lote ${lote.codigoLote}`,
-        );
-      }
-
-      const deposito = await this.depRepo.findOne({
-        where: { id: item.depositoId, tenantId },
-      });
-      if (!deposito) throw new NotFoundException('Depósito no encontrado');
-
-      // Registrar movimiento
-      await this.stockService.consumirLotePF?.(
-        tenantId,
-        lote.id,
-        item.cantidadKg,
-        TipoMovimiento.ENTREGA,
-        entrega.id,
-      );
-
-      // Crear ítem de entrega
-      const entregaItem = this.itemRepo.create({
-        entrega,
-        lote,
-        deposito,
-        cantidadKg: item.cantidadKg,
-        cantidadBultos: item.cantidadBultos,
-      });
-
-      await this.itemRepo.save(entregaItem);
-
-      // Actualizar stock del lote PF
-      lote.cantidadActualKg -= Number(item.cantidadKg);
-      await this.loteRepo.save(lote);
+      throw new BadRequestException(`El lote ${lote.codigoLote} está vencido`);
     }
+  }
+
+  // 2) Solo se entrega si está LISTO
+  if (lote.estado !== LotePfEstado.LISTO) {
+    throw new BadRequestException(
+      `El lote ${lote.codigoLote} no está LISTO (estado actual: ${lote.estado})`,
+    );
+  }
+
+  // 3) Validar stock
+  if (Number(lote.cantidadActualKg) < Number(item.cantidadKg)) {
+    throw new BadRequestException(`Stock insuficiente en lote ${lote.codigoLote}`);
+  }
+
+  const deposito = await this.depRepo.findOne({
+    where: { id: item.depositoId, tenantId },
+  });
+  if (!deposito) throw new NotFoundException('Depósito no encontrado');
+
+  // 4) Descontar stock (✅ UNA SOLA VEZ)
+  const loteActualizado = await this.stockService.consumirLotePF(
+    tenantId,
+    lote.id,
+    item.cantidadKg,
+    TipoMovimiento.ENTREGA,
+    entrega.id,
+  );
+
+  // 5) Crear item (tenantId ✅)
+  const entregaItem = this.itemRepo.create({
+    tenantId,
+    entrega,
+    lote,
+    deposito,
+    cantidadKg: item.cantidadKg,
+    cantidadBultos: item.cantidadBultos,
+  });
+  await this.itemRepo.save(entregaItem);
+
+  // 6) Si quedó en 0 => ENTREGADO
+  if (Number(loteActualizado.cantidadActualKg) <= 0) {
+    loteActualizado.estado = LotePfEstado.ENTREGADO;
+    loteActualizado.motivoEstado = `Entregado (remito ${dto.numeroRemito})`;
+    loteActualizado.fechaEstado = new Date();
+    await this.loteRepo.save(loteActualizado);
+  }
+}
 
     await this.auditoria.registrar(tenantId, usuarioId, 'ENTREGA_CREADA', {
       entregaId: entrega.id,

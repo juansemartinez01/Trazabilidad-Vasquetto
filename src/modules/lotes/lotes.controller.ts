@@ -1,5 +1,6 @@
-import { Controller, Get, Req, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Req, BadRequestException, Patch, Param, Body } from '@nestjs/common';
 import { LotesService } from './lotes.service';
+import { CambiarEstadoLotePfDto } from './dto/cambiar-estado-lote-pf.dto';
 
 @Controller('lotes')
 export class LotesController {
@@ -36,5 +37,16 @@ export class LotesController {
   listarPF(@Req() req) {
     const tenantId = this.getTenantId(req);
     return this.lotesService.listarLotesPF(tenantId);
+  }
+
+  
+  @Patch('pf/:id/estado')
+  cambiarEstadoPF(
+    @Req() req,
+    @Param('id') id: string,
+    @Body() dto: CambiarEstadoLotePfDto,
+  ) {
+    const tenantId = this.getTenantId(req);
+    return this.lotesService.cambiarEstadoPF(tenantId, id, dto);
   }
 }

@@ -11,6 +11,9 @@ export enum TipoMovimiento {
   ENTREGA = 'ENTREGA',
   AJUSTE = 'AJUSTE',
   MERMA = 'MERMA',
+
+  MERMA_MP = 'MERMA_MP',
+  MERMA_PF = 'MERMA_PF',
 }
 
 @Entity('stock_movimientos')
@@ -32,4 +35,14 @@ export class StockMovimiento extends TenantBaseEntity {
 
   @Column({ nullable: true })
   referenciaId?: string; // id de orden de producción o recepción
+
+  // StockMovimiento entity
+  @Column({ nullable: true })
+  motivo?: string;
+
+  @Column({ nullable: true })
+  responsableId?: string;
+
+  @Column('jsonb', { nullable: true })
+  evidencia?: any;
 }

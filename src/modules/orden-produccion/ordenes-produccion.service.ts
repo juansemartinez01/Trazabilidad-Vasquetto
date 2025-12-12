@@ -9,7 +9,7 @@ import { OrdenProduccion } from './entities/orden-produccion.entity';
 import { Receta } from '../recetas/entities/receta.entity';
 import { OrdenIngrediente } from './entities/orden-ingrediente.entity';
 import { OrdenConsumo } from './entities/orden-consumo.entity';
-import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
+import { LotePfEstado, LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
 import { Deposito } from '../deposito/entities/deposito.entity';
 import { StockService } from '../stock-movimiento/stock.service';
 import { TipoMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
@@ -157,6 +157,9 @@ export class OrdenesProduccionService {
       deposito,
       cantidadInicialKg: orden.cantidadKg,
       cantidadActualKg: orden.cantidadKg,
+      estado: LotePfEstado.RETENIDO,
+      fechaEstado: new Date(),
+      motivoEstado: 'Creado por producción (pendiente de liberación)',
     });
 
     await this.lotePFRepo.save(loteFinal);

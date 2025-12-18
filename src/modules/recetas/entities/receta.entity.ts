@@ -1,6 +1,7 @@
-import { Entity, Column, OneToMany } from 'typeorm';
+import { Entity, Column, OneToMany, ManyToOne } from 'typeorm';
 import { TenantBaseEntity } from '../../../common/entities/tenant-base.entity';
 import { RecetaVersion } from './receta-version.entity';
+import { ProductoFinal } from 'src/modules/producto-final/entities/producto-final.entity';
 
 @Entity('recetas')
 export class Receta extends TenantBaseEntity {
@@ -12,4 +13,8 @@ export class Receta extends TenantBaseEntity {
 
   @OneToMany(() => RecetaVersion, (v) => v.receta)
   versiones: RecetaVersion[];
+
+  // ✅ nuevo: qué producto final fabrica esta receta
+  @ManyToOne(() => ProductoFinal, { eager: true, nullable: true })
+  productoFinal: ProductoFinal | null;
 }

@@ -150,6 +150,8 @@ export class OrdenesProduccionService {
 
     const codigoLote = `PF-${new Date().toISOString().slice(0, 10)}-${orden.id.slice(-4)}`;
 
+    const productoFinal = orden.recetaVersion.receta.productoFinal;
+
     const loteFinal = this.lotePFRepo.create({
       tenantId,
       codigoLote,
@@ -160,6 +162,7 @@ export class OrdenesProduccionService {
       estado: LotePfEstado.RETENIDO,
       fechaEstado: new Date(),
       motivoEstado: 'Creado por producción (pendiente de liberación)',
+      productoFinal,
     });
 
     await this.lotePFRepo.save(loteFinal);
@@ -194,6 +197,8 @@ export class OrdenesProduccionService {
       where: { id: ordenId, tenantId },
       relations: [
         'recetaVersion',
+        'recetaVersion.receta',
+        'recetaVersion.receta.productoFinal',
         'ingredientes',
         'ingredientes.materiaPrima',
         'ingredientes.consumos',

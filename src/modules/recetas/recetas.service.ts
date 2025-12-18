@@ -10,6 +10,7 @@ import { RecetaVersion } from './entities/receta-version.entity';
 import { RecetaIngrediente } from './entities/receta-ingrediente.entity';
 import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
 import { AuditoriaService } from '../auditoria/auditoria.service';
+import { ProductoFinal } from '../producto-final/entities/producto-final.entity';
 
 @Injectable()
 export class RecetasService {
@@ -21,6 +22,8 @@ export class RecetasService {
     private ingRepo: Repository<RecetaIngrediente>,
     @InjectRepository(MateriaPrima) private mpRepo: Repository<MateriaPrima>,
     private auditoria: AuditoriaService,
+    @InjectRepository(ProductoFinal)
+    private pfRepo: Repository<ProductoFinal>,
   ) {}
 
   async crear(tenantId: string, usuarioId: string, dto: any) {
@@ -32,10 +35,17 @@ export class RecetasService {
       throw new BadRequestException('Los porcentajes deben sumar 100%');
     }
 
+    const productoFinal = await this.pfRepo.findOne({
+      where: { id: dto.productoFinalId, tenantId },
+    });
+    if (!productoFinal)
+      throw new NotFoundException('Producto final no encontrado');
+
     const receta = this.recetaRepo.create({
       tenantId,
       nombre: dto.nombre,
       descripcion: dto.descripcion,
+      productoFinal,
     });
 
     await this.recetaRepo.save(receta);

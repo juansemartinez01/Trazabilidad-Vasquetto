@@ -1,6 +1,7 @@
 import { Entity, Column, ManyToOne } from 'typeorm';
 import { TenantBaseEntity } from '../../../common/entities/tenant-base.entity';
 import { Deposito } from '../../deposito/entities/deposito.entity';
+import { ProductoFinal } from 'src/modules/producto-final/entities/producto-final.entity';
 
 
 export enum LotePfEstado {
@@ -46,4 +47,7 @@ export class LoteProductoFinal extends TenantBaseEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   fechaEstado: Date | null;
+
+  @ManyToOne(() => ProductoFinal, { eager: true, nullable: true })
+  productoFinal: ProductoFinal | null;
 }

@@ -8,6 +8,7 @@ import { RecetasController } from './recetas.controller';
 import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuditoriaModule } from '../auditoria/auditoria.module';
+import { ProductoFinal } from '../producto-final/entities/producto-final.entity';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AuditoriaModule } from '../auditoria/auditoria.module';
       RecetaVersion,
       RecetaIngrediente,
       MateriaPrima,
+      ProductoFinal,
     ]),
     AuditoriaModule,
   ],

@@ -35,4 +35,7 @@ export class CrearRecetaDto {
   @ValidateNested({ each: true })
   @Type(() => IngredienteRecetaDto)
   ingredientes: IngredienteRecetaDto[];
+
+  @IsUUID()
+  productoFinalId: string;
 }

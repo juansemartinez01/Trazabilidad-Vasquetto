@@ -48,6 +48,6 @@ export class LoteProductoFinal extends TenantBaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   fechaEstado: Date | null;
 
-  @ManyToOne(() => ProductoFinal, { eager: true, nullable: true })
-  productoFinal: ProductoFinal | null;
+  @ManyToOne(() => ProductoFinal, { eager: true, nullable: false })
+  productoFinal: ProductoFinal;
 }

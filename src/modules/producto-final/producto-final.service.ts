@@ -91,7 +91,13 @@ export class ProductoFinalService {
     // Reemplazo simple de presentaciones (robusto y fácil)
     if (dto.presentaciones) {
       // borrado lógico no tenés; hacemos hard replace
-      await this.presRepo.delete({ tenantId, productoFinal: { id } as any });
+      await this.presRepo
+        .createQueryBuilder()
+        .delete()
+        .where('tenantId = :tenantId', { tenantId })
+        .andWhere('producto_final_id = :id', { id })
+        .execute();
+
 
       pf.presentaciones = dto.presentaciones.map((p) =>
         this.presRepo.create({

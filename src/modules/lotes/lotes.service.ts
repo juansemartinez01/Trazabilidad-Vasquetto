@@ -28,7 +28,7 @@ export class LotesService {
   listarLotesPF(tenantId: string) {
     return this.lotePfRepo.find({
       where: { tenantId },
-      relations: ['deposito'],
+      relations: ['deposito', 'productoFinal'],
       order: { fechaProduccion: 'DESC' },
     });
   }

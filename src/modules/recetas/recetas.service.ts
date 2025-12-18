@@ -158,6 +158,7 @@ export class RecetasService {
     return this.recetaRepo.findOne({
       where: { id, tenantId },
       relations: [
+        'productoFinal',
         'versiones',
         'versiones.ingredientes',
         'versiones.ingredientes.materiaPrima',

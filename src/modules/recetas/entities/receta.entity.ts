@@ -15,6 +15,6 @@ export class Receta extends TenantBaseEntity {
   versiones: RecetaVersion[];
 
   // ✅ nuevo: qué producto final fabrica esta receta
-  @ManyToOne(() => ProductoFinal, { eager: true, nullable: true })
-  productoFinal: ProductoFinal | null;
+  @ManyToOne(() => ProductoFinal, { eager: true, nullable: false })
+  productoFinal: ProductoFinal;
 }

@@ -150,7 +150,12 @@ export class OrdenesProduccionService {
 
     const codigoLote = `PF-${new Date().toISOString().slice(0, 10)}-${orden.id.slice(-4)}`;
 
-    const productoFinal = orden.recetaVersion.receta.productoFinal;
+    const productoFinal = orden.recetaVersion?.receta?.productoFinal;
+    if (!productoFinal) {
+      throw new BadRequestException(
+        'La receta no tiene ProductoFinal asignado (productoFinalId).',
+      );
+    }
 
     const loteFinal = this.lotePFRepo.create({
       tenantId,
@@ -204,6 +209,8 @@ export class OrdenesProduccionService {
         'ingredientes.consumos',
         'ingredientes.consumos.lote',
         'loteFinal',
+        
+        'loteFinal.productoFinal',
       ],
     });
   }
@@ -214,7 +221,15 @@ export class OrdenesProduccionService {
   listar(tenantId: string) {
     return this.ordenRepo.find({
       where: { tenantId },
-      relations: ['recetaVersion', 'loteFinal', 'ingredientes'],
+      relations: [
+        'recetaVersion',
+        'recetaVersion.receta',
+        'recetaVersion.receta.productoFinal',
+        'ingredientes',
+        'ingredientes.materiaPrima',
+        'loteFinal',
+        'loteFinal.productoFinal',
+      ],
     });
   }
 }

@@ -25,6 +25,9 @@ import { LotesModule } from './modules/lotes/lotes.module';
 import { MetricasModule } from './modules/metricas/metricas.module';
 import { ConfiguracionModule } from './modules/configuracion/configuracion.module';
 import { ProductoFinalModule } from './modules/producto-final/producto-final.module';
+import { UsuariosModule } from './modules/usuarios/usuarios.module';
+import { RolesModule } from './modules/roles/roles.module';
+
 
 @Module({
   imports: [
@@ -48,6 +51,8 @@ import { ProductoFinalModule } from './modules/producto-final/producto-final.mod
     MetricasModule,
     ConfiguracionModule,
     ProductoFinalModule,
+    UsuariosModule,
+    RolesModule
     // acá vamos a ir agregando módulos
   ],
   providers: [

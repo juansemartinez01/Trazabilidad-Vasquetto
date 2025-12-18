@@ -16,4 +16,7 @@ export class Usuario extends TenantBaseEntity {
   @ManyToMany(() => Rol)
   @JoinTable()
   roles: Rol[];
+
+  @Column({ default: true })
+  activo: boolean;
 }

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MateriaPrima } from './entities/materia-prima.entity';
 import { Repository } from 'typeorm';
@@ -20,7 +20,19 @@ export class MateriaPrimaService {
     return mp;
   }
 
-  create(tenantId: string, dto: any) {
+  async create(tenantId: string, dto: any) {
+    if (dto.nombre) {
+      const existente = await this.repo.findOne({
+        where: { tenantId, nombre: dto.nombre },
+      });
+
+      if (existente) {
+        throw new BadRequestException(
+          `Ya existe una materia prima con el nombre "${dto.nombre}"`,
+        );
+      }
+    }
+
     const mp = this.repo.create({
       ...dto,
       tenantId,
@@ -29,8 +41,23 @@ export class MateriaPrimaService {
   }
 
   async update(id: string, tenantId: string, dto: any) {
-    await this.findOne(id, tenantId);
-    return this.repo.save({ id, tenantId, ...dto });
+    const mp = await this.findOne(id, tenantId);
+
+    // Si me quieren cambiar el nombre, valido que no exista otra MP con ese nombre
+    if (dto.nombre && dto.nombre !== mp.nombre) {
+      const existente = await this.repo.findOne({
+        where: { tenantId, nombre: dto.nombre },
+      });
+
+      if (existente) {
+        throw new BadRequestException(
+          `Ya existe una materia prima con el nombre "${dto.nombre}"`,
+        );
+      }
+    }
+
+    Object.assign(mp, dto);
+    return this.repo.save(mp);
   }
 
   async delete(id: string, tenantId: string) {

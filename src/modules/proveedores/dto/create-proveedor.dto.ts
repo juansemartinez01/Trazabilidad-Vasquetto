@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEmail, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsEmail, MaxLength, IsArray, IsUUID } from 'class-validator';
 
 export class CreateProveedorDto {
   @IsString()
@@ -32,4 +32,21 @@ export class CreateProveedorDto {
   @IsOptional()
   @IsEmail()
   email?: string;
+
+  // ✅ nuevos
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  numeroRenspa?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  numeroInscripcionSenasa?: string;
+
+  // ✅ asignación de materias primas
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  materiaPrimaIds?: string[];
 }

@@ -94,9 +94,11 @@ export class ProductoFinalService {
       await this.presRepo
         .createQueryBuilder()
         .delete()
-        .where('tenantId = :tenantId', { tenantId })
+        .from(PresentacionProductoFinal)
+        .where('tenant_id = :tenantId', { tenantId })
         .andWhere('producto_final_id = :id', { id })
         .execute();
+
 
 
       pf.presentaciones = dto.presentaciones.map((p) =>

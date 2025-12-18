@@ -10,6 +10,7 @@ import { EntregasService } from './entregas.service';
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { StockModule } from '../stock-movimiento/stock.module';
 import { AuditoriaModule } from '../auditoria/auditoria.module';
+import { PresentacionProductoFinal } from '../producto-final/entities/presentacion-producto-final.entity';
 
 
 @Module({
@@ -20,6 +21,7 @@ import { AuditoriaModule } from '../auditoria/auditoria.module';
       Cliente,
       LoteProductoFinal,
       Deposito,
+      PresentacionProductoFinal,
     ]),
     StockModule,
     AuditoriaModule,

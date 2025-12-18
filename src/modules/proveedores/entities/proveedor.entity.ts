@@ -1,17 +1,19 @@
-import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, Entity, Index, OneToMany, PrimaryGeneratedColumn } from 'typeorm';
 import { TenantBaseEntity } from '../../../common/entities/tenant-base.entity';
+import { ProveedorMateriaPrima } from './proveedor-materia-prima.entity';
 
 @Entity('proveedores')
 @Index(['tenantId', 'razonSocial'])
-@Index(['tenantId', 'cuit'])
+@Index('ux_prov_tenant_cuit', ['tenantId', 'cuit'], {
+  unique: true,
+  where: `"cuit" IS NOT NULL`,
+})
 export class Proveedor extends TenantBaseEntity {
-  
-
   @Column({ length: 200 })
   razonSocial: string;
 
-  @Column({ length: 20, nullable: true })
-  cuit?: string;
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  cuit: string | null;
 
   @Column({ length: 150, nullable: true })
   direccion?: string;
@@ -33,4 +35,15 @@ export class Proveedor extends TenantBaseEntity {
 
   @Column({ default: true })
   activo: boolean;
+
+  // ✅ nuevos
+  @Column({ length: 50, nullable: true })
+  numeroRenspa?: string;
+
+  @Column({ length: 50, nullable: true })
+  numeroInscripcionSenasa?: string;
+
+  // ✅ relación con MP vía tabla intermedia
+  @OneToMany(() => ProveedorMateriaPrima, (x) => x.proveedor)
+  materiasPrimasLink: ProveedorMateriaPrima[];
 }

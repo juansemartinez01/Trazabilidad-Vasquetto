@@ -16,10 +16,16 @@ export class CrearEntregaItemDto {
 
   @IsUUID()
   depositoId: string;
+  // ✅ nuevo
+  @IsOptional()
+  @IsUUID()
+  presentacionId?: string;
 
+  // ahora opcional: si viene presentacionId (no KG), lo calculamos
+  @IsOptional()
   @IsNumber()
   @Min(0.1)
-  cantidadKg: number;
+  cantidadKg?: number;
 
   @IsNumber()
   @Min(1)

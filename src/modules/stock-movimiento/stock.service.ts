@@ -396,4 +396,141 @@ export class StockService {
 
     return lote;
   }
+
+
+
+
+
+ 
+
+  // ======================================
+  //   RESUMEN STOCK MATERIA PRIMA (MP)
+  // ======================================
+  async resumenStockMP(tenantId: string) {
+    const lotes = await this.loteRepo.find({
+      where: { tenantId },
+      relations: ['materiaPrima', 'deposito'],
+      order: { fechaVencimiento: 'ASC' },
+    });
+
+    const map = new Map<
+      string,
+      {
+        materiaPrimaId: string;
+        nombre: string;
+        unidadMedida: string;
+        stockTotalKg: number;
+        lotes: Array<{
+          loteId: string;
+          codigoLote: string;
+          depositoId: string;
+          depositoNombre: string;
+          fechaVencimiento: Date;
+          cantidadActualKg: number;
+        }>;
+      }
+    >();
+
+    for (const lote of lotes) {
+      const mp = lote.materiaPrima;
+      if (!mp) continue;
+
+      const key = mp.id;
+      const cantidad = Number(lote.cantidadActualKg ?? 0);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          materiaPrimaId: mp.id,
+          nombre: mp.nombre,
+          unidadMedida: mp.unidadMedida,
+          stockTotalKg: 0,
+          lotes: [],
+        });
+      }
+
+      const entry = map.get(key)!;
+      entry.stockTotalKg += cantidad;
+
+      entry.lotes.push({
+        loteId: lote.id,
+        codigoLote: lote.codigoLote,
+        depositoId: lote.deposito?.id,
+        depositoNombre: lote.deposito?.nombre,
+        fechaVencimiento: lote.fechaVencimiento,
+        cantidadActualKg: cantidad,
+      });
+    }
+
+    // si querés, podés filtrar los que tienen 0 total
+    return Array.from(map.values());
+    // return Array.from(map.values()).filter((x) => x.stockTotalKg > 0);
+  }
+
+  // ======================================
+  //   RESUMEN STOCK PRODUCTO FINAL (PF)
+  // ======================================
+  async resumenStockPF(tenantId: string) {
+    const lotes = await this.lotePFRepo.find({
+      where: { tenantId },
+      relations: ['productoFinal', 'deposito'],
+      order: { fechaProduccion: 'DESC' },
+    });
+
+    const map = new Map<
+      string,
+      {
+        productoFinalId: string;
+        codigo: string;
+        nombre: string;
+        stockTotalKg: number;
+        lotes: Array<{
+          loteId: string;
+          codigoLote: string;
+          depositoId: string;
+          depositoNombre: string;
+          fechaProduccion: Date;
+          fechaVencimiento: Date | null;
+          estado: string;
+          cantidadActualKg: number;
+        }>;
+      }
+    >();
+
+    for (const lote of lotes) {
+      const pf = lote.productoFinal;
+      if (!pf) continue;
+
+      const key = pf.id;
+      const cantidad = Number(lote.cantidadActualKg ?? 0);
+
+      if (!map.has(key)) {
+        map.set(key, {
+          productoFinalId: pf.id,
+          codigo: pf.codigo,
+          nombre: pf.nombre,
+          stockTotalKg: 0,
+          lotes: [],
+        });
+      }
+
+      const entry = map.get(key)!;
+      entry.stockTotalKg += cantidad;
+
+      entry.lotes.push({
+        loteId: lote.id,
+        codigoLote: lote.codigoLote,
+        depositoId: lote.deposito?.id,
+        depositoNombre: lote.deposito?.nombre,
+        fechaProduccion: lote.fechaProduccion,
+        fechaVencimiento: lote.fechaVencimiento,
+        estado: lote.estado,
+        cantidadActualKg: cantidad,
+      });
+    }
+
+    return Array.from(map.values());
+    // idem, podés filtrar stockTotalKg > 0 si querés
+  }
+
+
 }

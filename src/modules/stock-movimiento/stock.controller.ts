@@ -14,6 +14,18 @@ export class StockController {
     return this.service.alertasStock(req.tenantId);
   }
 
+  // 🔹 NUEVO: resumen stock materias primas
+  @Get('resumen/mp')
+  resumenMP(@Req() req) {
+    return this.service.resumenStockMP(req.tenantId);
+  }
+
+  // 🔹 NUEVO: resumen stock producto final
+  @Get('resumen/pf')
+  resumenPF(@Req() req) {
+    return this.service.resumenStockPF(req.tenantId);
+  }
+
   @Post('ajustar/:loteId')
   ajustar(@Param('loteId') loteId: string, @Req() req, @Body() body) {
     return this.service.ajustarStock(

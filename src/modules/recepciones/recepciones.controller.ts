@@ -1,6 +1,7 @@
-import { Controller, Post, Body, Req, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Req, Get, UseGuards, Query } from '@nestjs/common';
 import { RecepcionesService } from './recepciones.service';
 import { AuthGuard } from '../auth/guards/auth.guard';
+import { QueryRecepcionesDto } from './dto/query-recepciones.dto';
 
 @Controller('recepciones')
 export class RecepcionesController {
@@ -14,7 +15,7 @@ export class RecepcionesController {
 
   @UseGuards(AuthGuard)
   @Get()
-  listar(@Req() req) {
-    return this.service.findAll(req.tenantId);
+  listar(@Req() req, @Query() q: QueryRecepcionesDto) {
+    return this.service.obtenerTodasConFiltros(req.tenantId, q);
   }
 }

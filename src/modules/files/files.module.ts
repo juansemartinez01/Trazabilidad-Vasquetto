@@ -3,6 +3,7 @@ import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { FilesController } from './files.controller';
 import { ImagesProvider } from './images.provider';
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
   imports: [
@@ -10,6 +11,7 @@ import { ImagesProvider } from './images.provider';
       storage: memoryStorage(), // 👈 necesario para tener file.buffer
       limits: { fileSize: 15 * 1024 * 1024 }, // igual a tu MAX_UPLOAD_BYTES
     }),
+    ConfigModule,
   ],
   controllers: [FilesController],
   providers: [ImagesProvider],

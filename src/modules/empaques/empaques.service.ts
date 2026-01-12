@@ -1,0 +1,518 @@
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { Empaque } from './entities/empaque.entity';
+import { EmpaqueItem } from './entities/empaque-item.entity';
+import { StockPresentacion } from './entities/stock-presentacion.entity';
+import { PFUnidadEnvasada } from './entities/pf-unidad-envasada.entity';
+import { CreateEmpaqueDto } from './dto/create-empaque.dto';
+import { AddEmpaqueItemDto } from './dto/add-empaque-item.dto';
+import { QueryEmpaquesDto } from './dto/query-empaques.dto';
+import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
+import { Deposito } from '../deposito/entities/deposito.entity';
+import {
+  PresentacionProductoFinal,
+  UnidadVenta,
+} from '../producto-final/entities/presentacion-producto-final.entity';
+import {
+  StockMovimiento,
+  TipoMovimiento,
+} from '../stock-movimiento/entities/stock-movimiento.entity';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+
+function dec(n: any) {
+  const v = Number(n);
+  if (Number.isNaN(v)) return 0;
+  return v;
+}
+
+@Injectable()
+export class EmpaquesService {
+  constructor(
+    private ds: DataSource,
+    @InjectRepository(Empaque) private empaqueRepo: Repository<Empaque>,
+    @InjectRepository(EmpaqueItem) private itemRepo: Repository<EmpaqueItem>,
+    @InjectRepository(StockPresentacion)
+    private stockPresRepo: Repository<StockPresentacion>,
+    @InjectRepository(PFUnidadEnvasada)
+    private unidadRepo: Repository<PFUnidadEnvasada>,
+    @InjectRepository(LoteProductoFinal)
+    private lotePFRepo: Repository<LoteProductoFinal>,
+    @InjectRepository(Deposito) private depRepo: Repository<Deposito>,
+    @InjectRepository(PresentacionProductoFinal)
+    private presRepo: Repository<PresentacionProductoFinal>,
+    @InjectRepository(StockMovimiento)
+    private movRepo: Repository<StockMovimiento>,
+    private auditoria: AuditoriaService,
+  ) {}
+
+  async crear(tenantId: string, usuarioId: string, dto: CreateEmpaqueDto) {
+    const lote = await this.lotePFRepo.findOne({
+      where: { id: dto.lotePfId, tenantId },
+    });
+    if (!lote) throw new NotFoundException('Lote PF no encontrado');
+
+    const deposito = await this.depRepo.findOne({
+      where: { id: dto.depositoId, tenantId },
+    });
+    if (!deposito) throw new NotFoundException('Depósito no encontrado');
+
+    const empaque = this.empaqueRepo.create({
+      tenantId,
+      lote,
+      deposito,
+      responsable: { id: dto.responsableId } as any,
+      fecha: new Date(dto.fecha),
+      estado: 'BORRADOR',
+      observaciones: dto.observaciones ?? null,
+      items: [],
+    });
+
+    const saved = await this.empaqueRepo.save(empaque);
+
+    await this.auditoria.registrar(tenantId, usuarioId, 'EMPAQUE_CREADO', {
+      empaqueId: saved.id,
+    });
+
+    return this.obtener(tenantId, saved.id);
+  }
+
+  async agregarItem(
+    tenantId: string,
+    usuarioId: string,
+    empaqueId: string,
+    dto: AddEmpaqueItemDto,
+  ) {
+    const empaque = await this.empaqueRepo.findOne({
+      where: { id: empaqueId, tenantId },
+      relations: ['items', 'lote', 'deposito'],
+    });
+    if (!empaque) throw new NotFoundException('Empaque no encontrado');
+
+    if (empaque.estado !== 'BORRADOR') {
+      throw new BadRequestException('Solo se pueden agregar items en BORRADOR');
+    }
+
+    const pres = await this.presRepo.findOne({
+      where: { id: dto.presentacionId, tenantId },
+    });
+    if (!pres) throw new NotFoundException('Presentación no encontrada');
+
+    // Validación BULTO/UNIDAD: requiere pesoPorUnidadKg
+    if (pres.unidadVenta !== UnidadVenta.KG) {
+      const peso = dec(pres.pesoPorUnidadKg);
+      if (!peso || peso <= 0) {
+        throw new BadRequestException(
+          `Presentación ${pres.codigo} requiere pesoPorUnidadKg`,
+        );
+      }
+    }
+
+    const item = this.itemRepo.create({
+      tenantId,
+      empaque,
+      presentacion: pres,
+      cantidadKg: dto.cantidadKg,
+      cantidadUnidades: null,
+    });
+
+    await this.itemRepo.save(item);
+
+    await this.auditoria.registrar(
+      tenantId,
+      usuarioId,
+      'EMPAQUE_ITEM_AGREGADO',
+      {
+        empaqueId,
+        presentacionId: pres.id,
+        cantidadKg: dto.cantidadKg,
+      },
+    );
+
+    return this.obtener(tenantId, empaqueId);
+  }
+
+  async quitarItem(
+    tenantId: string,
+    usuarioId: string,
+    empaqueId: string,
+    itemId: string,
+  ) {
+    const empaque = await this.empaqueRepo.findOne({
+      where: { id: empaqueId, tenantId },
+    });
+    if (!empaque) throw new NotFoundException('Empaque no encontrado');
+
+    if (empaque.estado !== 'BORRADOR') {
+      throw new BadRequestException('Solo se pueden quitar items en BORRADOR');
+    }
+
+    const item = await this.itemRepo.findOne({
+      where: { id: itemId, tenantId },
+      relations: ['empaque'],
+    });
+    if (!item || item.empaque?.id !== empaqueId)
+      throw new NotFoundException('Item no encontrado');
+
+    await this.itemRepo.delete({ id: itemId, tenantId });
+
+    await this.auditoria.registrar(
+      tenantId,
+      usuarioId,
+      'EMPAQUE_ITEM_QUITADO',
+      { empaqueId, itemId },
+    );
+
+    return this.obtener(tenantId, empaqueId);
+  }
+
+  async confirmar(tenantId: string, usuarioId: string, empaqueId: string) {
+    return this.ds.transaction(async (trx) => {
+      const empaqueRepo = trx.getRepository(Empaque);
+      const itemRepo = trx.getRepository(EmpaqueItem);
+      const loteRepo = trx.getRepository(LoteProductoFinal);
+      const stockPresRepo = trx.getRepository(StockPresentacion);
+      const unidadRepo = trx.getRepository(PFUnidadEnvasada);
+      const movRepo = trx.getRepository(StockMovimiento);
+
+      const empaque = await empaqueRepo.findOne({
+        where: { id: empaqueId, tenantId },
+        relations: ['items', 'items.presentacion', 'lote', 'deposito'],
+      });
+      if (!empaque) throw new NotFoundException('Empaque no encontrado');
+
+      if (empaque.estado !== 'BORRADOR') {
+        throw new BadRequestException(
+          'Solo se puede confirmar un empaque en BORRADOR',
+        );
+      }
+
+      const items = empaque.items ?? [];
+      if (!items.length)
+        throw new BadRequestException('El empaque no tiene items');
+
+      // 1) Validar total kg a consumir
+      const totalKg = items.reduce((acc, it) => acc + dec(it.cantidadKg), 0);
+      const disponible = dec(empaque.lote.cantidadActualKg);
+
+      if (totalKg <= 0)
+        throw new BadRequestException('Total a empaquetar debe ser > 0');
+      if (disponible < totalKg) {
+        throw new BadRequestException(
+          `Stock insuficiente en lote ${empaque.lote.codigoLote} (disponible ${disponible}, requerido ${totalKg})`,
+        );
+      }
+
+      // 2) Descontar del lote PF (granel)
+      empaque.lote.cantidadActualKg = disponible - totalKg;
+      await loteRepo.save(empaque.lote);
+
+      // Movimiento: consumo PF por empaque (granel)
+      await movRepo.save(
+        movRepo.create({
+          tenantId,
+          tipo: TipoMovimiento.EMPAQUE_CONSUMO_PF,
+          lotePF: empaque.lote,
+          deposito: empaque.lote.deposito, // sale del depósito del lote
+          cantidadKg: -totalKg,
+          referenciaId: empaque.id,
+        }),
+      );
+
+      // 3) Por cada item: sumar stock presentación y (si aplica) generar unidades etiquetadas
+      for (const it of items) {
+        const pres = it.presentacion as PresentacionProductoFinal;
+        const kg = dec(it.cantidadKg);
+
+        // Buscar/crear stock_presentaciones (presentacion + deposito del empaque)
+        let stock = await stockPresRepo.findOne({
+          where: {
+            tenantId,
+            presentacion: { id: pres.id } as any,
+            deposito: { id: empaque.deposito.id } as any,
+          },
+        });
+
+        if (!stock) {
+          stock = stockPresRepo.create({
+            tenantId,
+            presentacion: pres,
+            deposito: empaque.deposito,
+            stockKg: 0,
+            stockUnidades: 0,
+          });
+        }
+
+        // unidadVenta = KG => solo kg, no unidades etiquetadas
+        if (pres.unidadVenta === UnidadVenta.KG) {
+          stock.stockKg = dec(stock.stockKg) + kg;
+
+          await stockPresRepo.save(stock);
+
+          await movRepo.save(
+            movRepo.create({
+              tenantId,
+              tipo: TipoMovimiento.EMPAQUE_INGRESO_PRES,
+              lotePF: empaque.lote,
+              deposito: empaque.deposito,
+              presentacion: pres,
+              cantidadKg: kg,
+              cantidadUnidades: null,
+              referenciaId: empaque.id,
+            }),
+          );
+
+          it.cantidadUnidades = null;
+          await itemRepo.save(it);
+          continue;
+        }
+
+        // BULTO/UNIDAD => generar unidades con etiqueta
+        const peso = dec(pres.pesoPorUnidadKg);
+        if (!peso || peso <= 0) {
+          throw new BadRequestException(
+            `Presentación ${pres.codigo} requiere pesoPorUnidadKg`,
+          );
+        }
+
+        // Regla: debe ser múltiplo exacto o permitimos redondeo?
+        // Para producción robusta: exigimos exacto (evita inconsistencias).
+        const unidadesExactas = kg / peso;
+        const unidades = Math.round(unidadesExactas * 1000) / 1000;
+
+        if (Math.abs(unidades - Math.round(unidades)) > 1e-9) {
+          throw new BadRequestException(
+            `La cantidadKg (${kg}) no es múltiplo exacto del pesoPorUnidadKg (${peso}) para ${pres.codigo}`,
+          );
+        }
+
+        const unidadesInt = Math.round(unidades);
+
+        stock.stockUnidades = dec(stock.stockUnidades) + unidadesInt;
+        await stockPresRepo.save(stock);
+
+        // Guardar en item la cantidad de unidades generadas
+        it.cantidadUnidades = unidadesInt;
+        await itemRepo.save(it);
+
+        // Movimiento ingreso presentación
+        await movRepo.save(
+          movRepo.create({
+            tenantId,
+            tipo: TipoMovimiento.EMPAQUE_INGRESO_PRES,
+            lotePF: empaque.lote,
+            deposito: empaque.deposito,
+            presentacion: pres,
+            cantidadKg: kg,
+            cantidadUnidades: unidadesInt,
+            referenciaId: empaque.id,
+          }),
+        );
+
+        // Generar unidades etiquetadas
+        // Código: <codigoLote>-<presCodigo>-<secuencia>
+        // Para secuencia usamos conteo actual + i (simple y seguro con unique por tenant+codigo).
+        // Si querés secuencia global por presentación, lo ajustamos luego.
+        const basePrefix = `${empaque.lote.codigoLote}-${pres.codigo}`;
+
+        // obtener conteo actual para ese prefijo (evita colisiones)
+        const result = await unidadRepo
+          .createQueryBuilder('u')
+          .select('COUNT(*)', 'cnt')
+          .where('u.tenant_id = :tenantId', { tenantId })
+          .andWhere('u.codigo_etiqueta LIKE :p', { p: `${basePrefix}-%` })
+          .getRawOne<{ cnt: string }>();
+
+        let seq = Number(result?.cnt ?? 0);
+
+        const nuevas: PFUnidadEnvasada[] = [];
+        for (let i = 0; i < unidadesInt; i++) {
+          seq++;
+          const codigoEtiqueta = `${basePrefix}-${String(seq).padStart(6, '0')}`;
+
+          nuevas.push(
+            unidadRepo.create({
+              tenantId,
+              loteOrigen: empaque.lote,
+              presentacion: pres,
+              deposito: empaque.deposito,
+              codigoEtiqueta,
+              pesoKg: peso,
+              estado: 'DISPONIBLE',
+            }),
+          );
+        }
+
+        // insert masivo
+        await unidadRepo.save(nuevas);
+      }
+
+      // 4) Confirmar empaque
+      empaque.estado = 'CONFIRMADO';
+      await empaqueRepo.save(empaque);
+
+      await this.auditoria.registrar(
+        tenantId,
+        usuarioId,
+        'EMPAQUE_CONFIRMADO',
+        {
+          empaqueId,
+          lotePfId: empaque.lote.id,
+          totalKg,
+        },
+      );
+
+      // return detallado
+      return empaqueRepo.findOne({
+        where: { id: empaqueId, tenantId },
+        relations: [
+          'items',
+          'items.presentacion',
+          'lote',
+          'deposito',
+          'responsable',
+        ],
+      });
+    });
+  }
+
+  async obtener(tenantId: string, id: string) {
+    const e = await this.empaqueRepo.findOne({
+      where: { id, tenantId },
+      relations: [
+        'items',
+        'items.presentacion',
+        'lote',
+        'deposito',
+        'responsable',
+      ],
+    });
+    if (!e) throw new NotFoundException('Empaque no encontrado');
+    return e;
+  }
+
+  async listar(tenantId: string, q: QueryEmpaquesDto) {
+    const page = q.page ?? 1;
+    const limit = q.limit ?? 25;
+    const offset = (page - 1) * limit;
+
+    const mapOrder: Record<string, string> = {
+      fecha: 'e.fecha',
+      createdAt: 'e.created_at',
+      estado: 'e.estado',
+    };
+    const orderCampo = mapOrder[q.ordenCampo ?? 'fecha'] ?? mapOrder.fecha;
+    const orderDir = (q.ordenDireccion ?? 'DESC') as 'ASC' | 'DESC';
+
+    // IDs paginados (evitar duplicados por join items)
+    const idsQb = this.empaqueRepo
+      .createQueryBuilder('e')
+      .leftJoin('e.lote', 'l')
+      .leftJoin('e.deposito', 'd')
+      .leftJoin('e.responsable', 'r')
+      .leftJoin('e.items', 'it')
+      .leftJoin('it.presentacion', 'p')
+      .where('e.tenant_id = :tenantId', { tenantId });
+
+    if (q.estado) idsQb.andWhere('e.estado = :estado', { estado: q.estado });
+    if (q.lotePfId)
+      idsQb.andWhere('l.id = :lotePfId', { lotePfId: q.lotePfId });
+    if (q.depositoId) idsQb.andWhere('d.id = :depId', { depId: q.depositoId });
+    if (q.presentacionId)
+      idsQb.andWhere('p.id = :presId', { presId: q.presentacionId });
+
+    if (q.fechaDesde) idsQb.andWhere('e.fecha >= :fd', { fd: q.fechaDesde });
+    if (q.fechaHasta) idsQb.andWhere('e.fecha <= :fh', { fh: q.fechaHasta });
+
+    if (q.search) {
+      const s = `%${q.search}%`;
+      idsQb.andWhere(
+        `(
+        l.codigo_lote ILIKE :s
+        OR p.codigo ILIKE :s
+        OR p.nombre ILIKE :s
+        OR e.observaciones ILIKE :s
+      )`,
+        { s },
+      );
+    }
+
+    idsQb.select('e.id', 'id').distinctOn(['e.id']);
+    idsQb
+      .orderBy('e.id', 'ASC')
+      .addOrderBy(orderCampo, orderDir)
+      .addOrderBy('e.id', 'DESC');
+    idsQb.offset(offset).limit(limit);
+
+    const countQb = this.empaqueRepo
+      .createQueryBuilder('e')
+      .leftJoin('e.lote', 'l')
+      .leftJoin('e.deposito', 'd')
+      .leftJoin('e.items', 'it')
+      .leftJoin('it.presentacion', 'p')
+      .where('e.tenant_id = :tenantId', { tenantId });
+
+    if (q.estado) countQb.andWhere('e.estado = :estado', { estado: q.estado });
+    if (q.lotePfId)
+      countQb.andWhere('l.id = :lotePfId', { lotePfId: q.lotePfId });
+    if (q.depositoId)
+      countQb.andWhere('d.id = :depId', { depId: q.depositoId });
+    if (q.presentacionId)
+      countQb.andWhere('p.id = :presId', { presId: q.presentacionId });
+    if (q.fechaDesde) countQb.andWhere('e.fecha >= :fd', { fd: q.fechaDesde });
+    if (q.fechaHasta) countQb.andWhere('e.fecha <= :fh', { fh: q.fechaHasta });
+    if (q.search) {
+      const s = `%${q.search}%`;
+      countQb.andWhere(
+        `(
+        l.codigo_lote ILIKE :s
+        OR p.codigo ILIKE :s
+        OR p.nombre ILIKE :s
+        OR e.observaciones ILIKE :s
+      )`,
+        { s },
+      );
+    }
+
+    const totalRaw = await countQb
+      .select('COUNT(DISTINCT e.id)', 'total')
+      .getRawOne<{ total: string }>();
+    const total = Number(totalRaw?.total ?? 0);
+
+    const ids = (await idsQb.getRawMany<{ id: string }>()).map((x) => x.id);
+    if (!ids.length) return { data: [], total, page, limit };
+
+    const data = await this.empaqueRepo
+      .createQueryBuilder('e')
+      .leftJoinAndSelect('e.lote', 'l')
+      .leftJoinAndSelect('e.deposito', 'd')
+      .leftJoinAndSelect('e.responsable', 'r')
+      .leftJoinAndSelect('e.items', 'it')
+      .leftJoinAndSelect('it.presentacion', 'p')
+      .where('e.tenant_id = :tenantId', { tenantId })
+      .andWhere('e.id IN (:...ids)', { ids })
+      .orderBy(orderCampo, orderDir)
+      .addOrderBy('e.id', 'DESC')
+      .getMany();
+
+    return { data, total, page, limit };
+  }
+
+  async unidadesPorLote(tenantId: string, lotePfId: string) {
+    return this.unidadRepo.find({
+      where: { tenantId, loteOrigen: { id: lotePfId } as any },
+      order: { createdAt: 'DESC' as any },
+    });
+  }
+
+  async resumenStockPresentaciones(tenantId: string) {
+    // Devuelve stock por presentación + depósito
+    return this.stockPresRepo.find({
+      where: { tenantId },
+    });
+  }
+}

@@ -27,6 +27,8 @@ import { ConfiguracionModule } from './modules/configuracion/configuracion.modul
 import { ProductoFinalModule } from './modules/producto-final/producto-final.module';
 import { UsuariosModule } from './modules/usuarios/usuarios.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { EmpaquesModule } from './modules/empaques/empaques.module';
+import { FilesModule } from './modules/files/files.module';
 
 
 @Module({
@@ -52,7 +54,9 @@ import { RolesModule } from './modules/roles/roles.module';
     ConfiguracionModule,
     ProductoFinalModule,
     UsuariosModule,
-    RolesModule
+    RolesModule,
+    EmpaquesModule,
+    FilesModule,
     // acá vamos a ir agregando módulos
   ],
   providers: [

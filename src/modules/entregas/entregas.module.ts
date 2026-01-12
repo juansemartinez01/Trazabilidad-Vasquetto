@@ -11,6 +11,9 @@ import { Cliente } from '../clientes/entities/cliente.entity';
 import { StockModule } from '../stock-movimiento/stock.module';
 import { AuditoriaModule } from '../auditoria/auditoria.module';
 import { PresentacionProductoFinal } from '../producto-final/entities/presentacion-producto-final.entity';
+import { StockMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
+import { StockPresentacion } from '../empaques/entities/stock-presentacion.entity';
+import { PFUnidadEnvasada } from '../empaques/entities/pf-unidad-envasada.entity';
 
 
 @Module({
@@ -22,6 +25,12 @@ import { PresentacionProductoFinal } from '../producto-final/entities/presentaci
       LoteProductoFinal,
       Deposito,
       PresentacionProductoFinal,
+      // ✅ ESTO TE FALTABA (index [7] del error)
+      StockMovimiento,
+
+      // ✅ para Camino B
+      StockPresentacion,
+      PFUnidadEnvasada,
     ]),
     StockModule,
     AuditoriaModule,

@@ -229,26 +229,23 @@ export class RecepcionesService {
     const limit = q.limit ?? 25;
     const offset = (page - 1) * limit;
 
-    // ✅ includeLotes puede venir como string desde query (?includeLotes=true)
-    const includeLotes =
-      q.includeLotes === true ||
-      (q as any).includeLotes === 'true' ||
-      (q as any).includeLotes === '1' ||
-      (q as any).includeLotes === 1;
-
-    // 1) IDs paginados
+    /* =========================
+   * 1) IDS PAGINADOS
+   ========================= */
     const idsQb = this.recepcionRepo.createQueryBuilder('r');
     this.applyFilters(idsQb, tenantId, q);
 
-    idsQb.select('r.id', 'id');
-    idsQb.distinctOn(['r.id']);
+    idsQb.select('r.id', 'id').distinctOn(['r.id']);
 
     this.applyOrder(idsQb, q, { distinctOnId: true });
     idsQb.offset(offset).limit(limit);
 
-    // 2) Total distinct
+    /* =========================
+   * 2) TOTAL DISTINCT
+   ========================= */
     const countQb = this.recepcionRepo.createQueryBuilder('r');
     this.applyFilters(countQb, tenantId, q);
+
     const total = await countQb
       .select('COUNT(DISTINCT r.id)', 'total')
       .getRawOne<{ total: string }>();
@@ -257,26 +254,26 @@ export class RecepcionesService {
     const ids = idsRaw.map((x) => x.id);
 
     if (ids.length === 0) {
-      return { data: [], total: Number(total?.total ?? 0), page, limit };
+      return {
+        data: [],
+        total: Number(total?.total ?? 0),
+        page,
+        limit,
+      };
     }
 
-    // 3) Fetch final (con relaciones)
+    /* =========================
+   * 3) FETCH FINAL COMPLETO
+   ========================= */
     const fetchQb = this.recepcionRepo
       .createQueryBuilder('r')
-      .leftJoinAndSelect('r.proveedor', 'p') // aunque sea eager, acá queda explícito
+      .leftJoinAndSelect('r.proveedor', 'p')
+      .leftJoinAndSelect('r.lotes', 'l') // ✅ LOTES
+      .leftJoinAndSelect('l.materiaPrima', 'mp') // ✅ MP
+      .leftJoinAndSelect('l.deposito', 'd') // ✅ DEPÓSITO
       .where('r.tenant_id = :tenantId', { tenantId })
       .andWhere('r.id IN (:...ids)', { ids });
 
-    // ✅ Traer info completa de MP ingresada => VIENE POR LOS LOTES
-    // Si querés que SIEMPRE venga, sacá el if y dejalo fijo.
-    if (includeLotes) {
-      fetchQb
-        .leftJoinAndSelect('r.lotes', 'l')
-        .leftJoinAndSelect('l.materiaPrima', 'mp')
-        .leftJoinAndSelect('l.deposito', 'd');
-    }
-
-    // orden estable
     this.applyOrder(fetchQb, q);
     fetchQb.addOrderBy('r.id', 'ASC');
 

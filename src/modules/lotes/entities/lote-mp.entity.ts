@@ -1,4 +1,4 @@
-import { Entity, Column, ManyToOne } from 'typeorm';
+import { Entity, Column, ManyToOne, JoinColumn } from 'typeorm';
 import { TenantBaseEntity } from '../../../common/entities/tenant-base.entity';
 import { Recepcion } from '../../recepciones/entities/recepcion.entity';
 import { MateriaPrima } from '../../materia-prima/entities/materia-prima.entity';
@@ -6,7 +6,11 @@ import { Deposito } from '../../deposito/entities/deposito.entity';
 
 @Entity('lotes_mp')
 export class LoteMP extends TenantBaseEntity {
-  @ManyToOne(() => Recepcion, (r) => r.lotes)
+  @ManyToOne(() => Recepcion, (r) => r.lotes, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'recepcion_id' })
   recepcion: Recepcion;
 
   @ManyToOne(() => MateriaPrima, { eager: true })

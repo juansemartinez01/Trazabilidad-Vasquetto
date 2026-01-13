@@ -229,6 +229,13 @@ export class RecepcionesService {
     const limit = q.limit ?? 25;
     const offset = (page - 1) * limit;
 
+    // ✅ includeLotes puede venir como string desde query (?includeLotes=true)
+    const includeLotes =
+      q.includeLotes === true ||
+      (q as any).includeLotes === 'true' ||
+      (q as any).includeLotes === '1' ||
+      (q as any).includeLotes === 1;
+
     // 1) IDs paginados
     const idsQb = this.recepcionRepo.createQueryBuilder('r');
     this.applyFilters(idsQb, tenantId, q);
@@ -262,14 +269,11 @@ export class RecepcionesService {
 
     // ✅ Traer info completa de MP ingresada => VIENE POR LOS LOTES
     // Si querés que SIEMPRE venga, sacá el if y dejalo fijo.
-    if (q.includeLotes) {
+    if (includeLotes) {
       fetchQb
         .leftJoinAndSelect('r.lotes', 'l')
         .leftJoinAndSelect('l.materiaPrima', 'mp')
         .leftJoinAndSelect('l.deposito', 'd');
-      // si LoteMP tiene más relaciones útiles, se agregan acá:
-      // .leftJoinAndSelect('l.presentacion', 'pres')
-      // .leftJoinAndSelect('l.movimientos', 'mov')  (si existiera)
     }
 
     // orden estable

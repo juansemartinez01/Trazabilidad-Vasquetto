@@ -245,8 +245,9 @@ export class StockService {
 
     if (!lote) throw new NotFoundException('Lote PF no encontrado');
 
-    lote.cantidadActualKg += Number(cantidad);
-    await this.lotePFRepo.save(lote);
+    // ✅ NO tocar acumulado del lote acá (ya se setea al crearlo)
+    // lote.cantidadActualKg += Number(cantidad);
+    // await this.lotePFRepo.save(lote);
 
     await this.movRepo.save(
       this.movRepo.create({
@@ -254,7 +255,7 @@ export class StockService {
         tipo: TipoMovimiento.PRODUCCION_INGRESO,
         lotePF: lote,
         deposito: lote.deposito,
-        cantidadKg: cantidad,
+        cantidadKg: Number(cantidad), // por las dudas normalizamos
         referenciaId,
       }),
     );
@@ -397,12 +398,6 @@ export class StockService {
     return lote;
   }
 
-
-
-
-
- 
-
   // ======================================
   //   RESUMEN STOCK MATERIA PRIMA (MP)
   // ======================================
@@ -531,6 +526,4 @@ export class StockService {
     return Array.from(map.values());
     // idem, podés filtrar stockTotalKg > 0 si querés
   }
-
-
 }

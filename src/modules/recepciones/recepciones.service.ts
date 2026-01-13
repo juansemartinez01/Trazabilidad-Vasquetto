@@ -229,21 +229,17 @@ export class RecepcionesService {
     const limit = q.limit ?? 25;
     const offset = (page - 1) * limit;
 
-    // 1) Query base para IDs paginados (evita duplicados por joins 1-N)
+    // 1) IDs paginados
     const idsQb = this.recepcionRepo.createQueryBuilder('r');
     this.applyFilters(idsQb, tenantId, q);
 
     idsQb.select('r.id', 'id');
-
-    // ✅ Postgres-friendly: DISTINCT ON para paginar sin duplicados
     idsQb.distinctOn(['r.id']);
 
-    // ORDER BY debe comenzar por r.id si usás DISTINCT ON (r.id)
     this.applyOrder(idsQb, q, { distinctOnId: true });
-
     idsQb.offset(offset).limit(limit);
 
-    // 2) Total (count distinct)
+    // 2) Total distinct
     const countQb = this.recepcionRepo.createQueryBuilder('r');
     this.applyFilters(countQb, tenantId, q);
     const total = await countQb
@@ -257,22 +253,28 @@ export class RecepcionesService {
       return { data: [], total: Number(total?.total ?? 0), page, limit };
     }
 
-    // 3) Fetch final (con relaciones según includeLotes)
+    // 3) Fetch final (con relaciones)
     const fetchQb = this.recepcionRepo
       .createQueryBuilder('r')
-      .leftJoinAndSelect('r.proveedor', 'p')
+      .leftJoinAndSelect('r.proveedor', 'p') // aunque sea eager, acá queda explícito
       .where('r.tenant_id = :tenantId', { tenantId })
       .andWhere('r.id IN (:...ids)', { ids });
 
+    // ✅ Traer info completa de MP ingresada => VIENE POR LOS LOTES
+    // Si querés que SIEMPRE venga, sacá el if y dejalo fijo.
     if (q.includeLotes) {
       fetchQb
         .leftJoinAndSelect('r.lotes', 'l')
         .leftJoinAndSelect('l.materiaPrima', 'mp')
         .leftJoinAndSelect('l.deposito', 'd');
+      // si LoteMP tiene más relaciones útiles, se agregan acá:
+      // .leftJoinAndSelect('l.presentacion', 'pres')
+      // .leftJoinAndSelect('l.movimientos', 'mov')  (si existiera)
     }
 
-    // Reaplica orden (el set ya está paginado por ids)
+    // orden estable
     this.applyOrder(fetchQb, q);
+    fetchQb.addOrderBy('r.id', 'ASC');
 
     const data = await fetchQb.getMany();
 

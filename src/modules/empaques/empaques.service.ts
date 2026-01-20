@@ -23,6 +23,10 @@ import {
   TipoMovimiento,
 } from '../stock-movimiento/entities/stock-movimiento.entity';
 import { AuditoriaService } from '../auditoria/auditoria.service';
+import { Insumo } from '../insumo/entities/insumo.entity';
+import { InsumoMovimiento, TipoMovimientoInsumo } from '../insumo/entities/insumo-movimiento.entity';
+
+import { InsumoConsumoPfService } from '../insumo/insumo-consumo-pf.service';
 
 function dec(n: any) {
   const v = Number(n);
@@ -48,6 +52,7 @@ export class EmpaquesService {
     @InjectRepository(StockMovimiento)
     private movRepo: Repository<StockMovimiento>,
     private auditoria: AuditoriaService,
+    private insumoConsumoService: InsumoConsumoPfService,
   ) {}
 
   async crear(tenantId: string, usuarioId: string, dto: CreateEmpaqueDto) {
@@ -179,9 +184,21 @@ export class EmpaquesService {
       const unidadRepo = trx.getRepository(PFUnidadEnvasada);
       const movRepo = trx.getRepository(StockMovimiento);
 
+      // ✅ NUEVO (insumos globales)
+      const insumoRepo = trx.getRepository(Insumo);
+      const insumoMovRepo = trx.getRepository(InsumoMovimiento);
+
       const empaque = await empaqueRepo.findOne({
         where: { id: empaqueId, tenantId },
-        relations: ['items', 'items.presentacion', 'lote', 'deposito'],
+        // ✅ agregado lote.productoFinal SOLO para poder calcular reglas por PF
+        relations: [
+          'items',
+          'items.presentacion',
+          'lote',
+          'lote.productoFinal',
+          'deposito',
+          'responsable',
+        ],
       });
       if (!empaque) throw new NotFoundException('Empaque no encontrado');
 
@@ -222,6 +239,11 @@ export class EmpaquesService {
           referenciaId: empaque.id,
         }),
       );
+
+      const productoFinalId =
+        (empaque.lote as any)?.productoFinal?.id ??
+        (empaque.lote as any)?.productoFinalId ??
+        null;
 
       // 3) Por cada item: sumar stock presentación y (si aplica) generar unidades etiquetadas
       for (const it of items) {
@@ -268,6 +290,68 @@ export class EmpaquesService {
 
           it.cantidadUnidades = null;
           await itemRepo.save(it);
+
+          // ============================
+          // ✅ NUEVO: CONSUMO INSUMOS (para KG también)
+          // ============================
+          const consumos = await this.insumoConsumoService.calcularConsumo(
+            tenantId,
+            {
+              productoFinalId: productoFinalId ?? undefined,
+              presentacionId: pres.id,
+              unidades: 0,
+              kg,
+            },
+          );
+
+          const aConsumir = consumos.filter(
+            (x) => Number(x.requerido ?? 0) > 0,
+          );
+          const faltantes = aConsumir.filter(
+            (x) => Number(x.faltante ?? 0) > 0,
+          );
+          if (faltantes.length) {
+            throw new BadRequestException({
+              message:
+                'Stock insuficiente de insumos para confirmar el empaque',
+              faltantes,
+            });
+          }
+
+          for (const c of aConsumir) {
+            const requerido = Number(c.requerido ?? 0);
+            if (!Number.isFinite(requerido) || requerido <= 0) continue;
+
+            const insumo = await insumoRepo.findOne({
+              where: { id: c.insumoId, tenantId },
+              lock: { mode: 'pessimistic_write' },
+            });
+            if (!insumo) throw new NotFoundException('Insumo no encontrado');
+
+            const actualInsumo = Number(insumo.stockActual ?? 0);
+            if (actualInsumo < requerido) {
+              throw new BadRequestException(
+                `Stock insuficiente de insumo "${insumo.nombre}" (actual ${actualInsumo}, requerido ${requerido})`,
+              );
+            }
+
+            insumo.stockActual = actualInsumo - requerido;
+            await insumoRepo.save(insumo);
+
+            await insumoMovRepo.save(
+              insumoMovRepo.create({
+                tenantId,
+                insumo,
+                insumoId: insumo.id,
+                tipo: TipoMovimientoInsumo.EGRESO,
+                cantidad: -requerido,
+                motivo: 'EMPAQUE_CONSUMO_INSUMO',
+                referenciaId: empaque.id,
+                responsableId: empaque.responsable?.id ?? null,
+              }),
+            );
+          }
+
           continue;
         }
 
@@ -349,6 +433,62 @@ export class EmpaquesService {
 
         // insert masivo
         await unidadRepo.save(nuevas);
+
+        // ============================
+        // ✅ NUEVO: CONSUMO INSUMOS (UNIDAD/BULTO)
+        // ============================
+        const consumos = await this.insumoConsumoService.calcularConsumo(
+          tenantId,
+          {
+            productoFinalId: productoFinalId ?? undefined,
+            presentacionId: pres.id,
+            unidades: unidadesInt,
+            kg,
+          },
+        );
+
+        const aConsumir = consumos.filter((x) => Number(x.requerido ?? 0) > 0);
+        const faltantes = aConsumir.filter((x) => Number(x.faltante ?? 0) > 0);
+        if (faltantes.length) {
+          throw new BadRequestException({
+            message: 'Stock insuficiente de insumos para confirmar el empaque',
+            faltantes,
+          });
+        }
+
+        for (const c of aConsumir) {
+          const requerido = Number(c.requerido ?? 0);
+          if (!Number.isFinite(requerido) || requerido <= 0) continue;
+
+          const insumo = await insumoRepo.findOne({
+            where: { id: c.insumoId, tenantId },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (!insumo) throw new NotFoundException('Insumo no encontrado');
+
+          const actualInsumo = Number(insumo.stockActual ?? 0);
+          if (actualInsumo < requerido) {
+            throw new BadRequestException(
+              `Stock insuficiente de insumo "${insumo.nombre}" (actual ${actualInsumo}, requerido ${requerido})`,
+            );
+          }
+
+          insumo.stockActual = actualInsumo - requerido;
+          await insumoRepo.save(insumo);
+
+          await insumoMovRepo.save(
+            insumoMovRepo.create({
+              tenantId,
+              insumo,
+              insumoId: insumo.id,
+              tipo: TipoMovimientoInsumo.EGRESO,
+              cantidad: -requerido,
+              motivo: 'EMPAQUE_CONSUMO_INSUMO',
+              referenciaId: empaque.id,
+              responsableId: empaque.responsable?.id ?? null,
+            }),
+          );
+        }
       }
 
       // 4) Confirmar empaque

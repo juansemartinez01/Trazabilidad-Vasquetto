@@ -12,6 +12,10 @@ import {
 } from './entities/stock-movimiento.entity';
 import { Deposito } from './../deposito/entities/deposito.entity';
 import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
+import { ProductoFinal } from '../producto-final/entities/producto-final.entity';
+import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
+import { StockMinimoPF } from '../configuracion/entities/stock-minimo-pf.entity';
+import { StockMinimoMP } from '../configuracion/entities/stock-minimo-mp.entity';
 
 @Injectable()
 export class StockService {
@@ -22,6 +26,14 @@ export class StockService {
     @InjectRepository(Deposito) private depRepo: Repository<Deposito>,
     @InjectRepository(LoteProductoFinal)
     private lotePFRepo: Repository<LoteProductoFinal>,
+
+    // ✅ NUEVO
+    @InjectRepository(StockMinimoMP)
+    private minMpRepo: Repository<StockMinimoMP>,
+    @InjectRepository(StockMinimoPF)
+    private minPfRepo: Repository<StockMinimoPF>,
+    @InjectRepository(MateriaPrima) private mpRepo: Repository<MateriaPrima>,
+    @InjectRepository(ProductoFinal) private pfRepo: Repository<ProductoFinal>,
   ) {}
 
   /** ======================
@@ -525,5 +537,87 @@ export class StockService {
 
     return Array.from(map.values());
     // idem, podés filtrar stockTotalKg > 0 si querés
+  }
+
+  async materiasPrimasBajoMinimo(tenantId: string) {
+    // Stock total por MP (sumando lotes)
+    const stockPorMp = await this.loteRepo
+      .createQueryBuilder('l')
+      .select('l.materia_prima_id', 'materiaPrimaId')
+      .addSelect('COALESCE(SUM(l.cantidad_actual_kg), 0)', 'stockActualKg')
+      .where('l.tenant_id = :tenantId', { tenantId })
+      .groupBy('l.materia_prima_id')
+      .getRawMany<{ materiaPrimaId: string; stockActualKg: string }>();
+
+    const stockMap = new Map(
+      stockPorMp.map((x) => [x.materiaPrimaId, Number(x.stockActualKg ?? 0)]),
+    );
+
+    // Mínimos configurados (solo para las MPs que tienen mínimo definido)
+    const minimos = await this.minMpRepo.find({
+      where: { tenantId },
+      relations: ['materiaPrima'],
+    });
+
+    const result = minimos
+      .map((m) => {
+        const mp = m.materiaPrima;
+        const stockActualKg = stockMap.get(mp.id) ?? 0;
+        const stockMinKg = Number(m.stockMinKg ?? 0);
+        const faltanteKg = Math.max(0, stockMinKg - stockActualKg);
+
+        return {
+          materiaPrimaId: mp.id,
+          nombre: mp.nombre,
+          unidadMedida: (mp as any).unidadMedida ?? null, // si existe en tu entity
+          stockActualKg,
+          stockMinKg,
+          faltanteKg,
+        };
+      })
+      .filter((x) => x.stockActualKg < x.stockMinKg)
+      .sort((a, b) => b.faltanteKg - a.faltanteKg);
+
+    return result;
+  }
+
+  async productosFinalesBajoMinimo(tenantId: string) {
+    const stockPorPf = await this.lotePFRepo
+      .createQueryBuilder('l')
+      .select('l.producto_final_id', 'productoFinalId')
+      .addSelect('COALESCE(SUM(l.cantidad_actual_kg), 0)', 'stockActualKg')
+      .where('l.tenant_id = :tenantId', { tenantId })
+      .groupBy('l.producto_final_id')
+      .getRawMany<{ productoFinalId: string; stockActualKg: string }>();
+
+    const stockMap = new Map(
+      stockPorPf.map((x) => [x.productoFinalId, Number(x.stockActualKg ?? 0)]),
+    );
+
+    const minimos = await this.minPfRepo.find({
+      where: { tenantId },
+      relations: ['productoFinal'],
+    });
+
+    const result = minimos
+      .map((m) => {
+        const pf = m.productoFinal;
+        const stockActualKg = stockMap.get(pf.id) ?? 0;
+        const stockMinKg = Number(m.stockMinKg ?? 0);
+        const faltanteKg = Math.max(0, stockMinKg - stockActualKg);
+
+        return {
+          productoFinalId: pf.id,
+          codigo: pf.codigo,
+          nombre: pf.nombre,
+          stockActualKg,
+          stockMinKg,
+          faltanteKg,
+        };
+      })
+      .filter((x) => x.stockActualKg < x.stockMinKg)
+      .sort((a, b) => b.faltanteKg - a.faltanteKg);
+
+    return result;
   }
 }

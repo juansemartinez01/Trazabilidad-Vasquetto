@@ -26,6 +26,18 @@ export class StockController {
     return this.service.resumenStockPF(req.tenantId);
   }
 
+  // ✅ NUEVO: MPs por debajo del mínimo
+  @Get('minimos/mp/bajo')
+  mpBajoMinimo(@Req() req) {
+    return this.service.materiasPrimasBajoMinimo(req.tenantId);
+  }
+
+  // ✅ NUEVO: PFs por debajo del mínimo
+  @Get('minimos/pf/bajo')
+  pfBajoMinimo(@Req() req) {
+    return this.service.productosFinalesBajoMinimo(req.tenantId);
+  }
+
   @Post('ajustar/:loteId')
   ajustar(@Param('loteId') loteId: string, @Req() req, @Body() body) {
     return this.service.ajustarStock(

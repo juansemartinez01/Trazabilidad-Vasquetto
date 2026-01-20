@@ -12,6 +12,7 @@ import { AuditoriaService } from "../auditoria/auditoria.service";
 import { Module } from '@nestjs/common';
 import { AuditoriaModule } from "../auditoria/auditoria.module";
 import { StockModule } from "../stock-movimiento/stock.module";
+import { Usuario } from "../usuarios/entities/usuarios.entity";
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { StockModule } from "../stock-movimiento/stock.module";
       LoteProductoFinal,
       Receta,
       Deposito,
+      Usuario
     ]),
     StockModule,
     AuditoriaModule,

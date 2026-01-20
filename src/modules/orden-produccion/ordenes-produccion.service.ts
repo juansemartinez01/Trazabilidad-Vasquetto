@@ -14,6 +14,7 @@ import { Deposito } from '../deposito/entities/deposito.entity';
 import { StockService } from '../stock-movimiento/stock.service';
 import { TipoMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
 import { AuditoriaService } from '../auditoria/auditoria.service';
+import { Usuario } from '../usuarios/entities/usuarios.entity';
 
 @Injectable()
 export class OrdenesProduccionService {
@@ -30,6 +31,7 @@ export class OrdenesProduccionService {
     @InjectRepository(Deposito) private depRepo: Repository<Deposito>,
     private stockService: StockService,
     private auditoria: AuditoriaService,
+    @InjectRepository(Usuario) private usuariosRepo: Repository<Usuario>,
   ) {}
 
   /** ============================
@@ -88,8 +90,8 @@ export class OrdenesProduccionService {
   }
 
   /** ============================
-   *  PROCESAR ORDEN (CONSUMO FEFO + LOTE FINAL)
-   ============================ */
+ *  PROCESAR ORDEN (CONSUMO FEFO + LOTE FINAL)
+ ============================ */
   async procesar(
     tenantId: string,
     usuarioId: string,
@@ -106,92 +108,145 @@ export class OrdenesProduccionService {
       throw new BadRequestException('La orden ya fue procesada');
     }
 
+    const cantidadKg = Number(orden.cantidadKg);
+    if (!Number.isFinite(cantidadKg) || cantidadKg <= 0) {
+      throw new BadRequestException('La cantidadKg de la orden debe ser > 0');
+    }
+
+    // (Pulido pro) validar responsable para evitar FK responsable_id
+    const responsableId = orden?.responsable?.id;
+    if (!responsableId) {
+      throw new BadRequestException('La orden no tiene responsable asignado');
+    }
+    const responsableOk = await this.usuariosRepo.findOne({
+      where: { id: responsableId, tenantId },
+    });
+    if (!responsableOk) {
+      throw new BadRequestException('Responsable inválido');
+    }
+
     orden.estado = 'procesando';
     await this.ordenRepo.save(orden);
 
-    // 1. CONSUMIR INGREDIENTES APLICANDO FEFO
-    for (const ing of orden.ingredientes) {
-      const lotesFEFO = await this.stockService.obtenerLotesFEFO(
-        tenantId,
-        ing.materiaPrima.id,
-        ing.kgNecesarios,
-      );
+    let loteFinalId: string | null = null;
 
-      for (const lote of lotesFEFO) {
-        // Descontar stock
-        await this.stockService.consumirLote(
+    try {
+      // 1. CONSUMIR INGREDIENTES APLICANDO FEFO
+      for (const ing of orden.ingredientes) {
+        const lotesFEFO = await this.stockService.obtenerLotesFEFO(
           tenantId,
-          lote.lote.id,
-          lote.cantidad,
-          TipoMovimiento.PRODUCCION_CONSUMO,
-          orden.id,
+          ing.materiaPrima.id,
+          ing.kgNecesarios,
         );
 
-        // Registrar trazabilidad real
-        await this.consumoRepo.save(
-          this.consumoRepo.create({
+        for (const lote of lotesFEFO) {
+          // Descontar stock
+          await this.stockService.consumirLote(
             tenantId,
-            ingrediente: ing,
-            lote: lote.lote,
-            cantidadKg: lote.cantidad,
-          }),
+            lote.lote.id,
+            lote.cantidad,
+            TipoMovimiento.PRODUCCION_CONSUMO,
+            orden.id,
+          );
+
+          // Registrar trazabilidad real
+          await this.consumoRepo.save(
+            this.consumoRepo.create({
+              tenantId,
+              ingrediente: ing,
+              lote: lote.lote,
+              cantidadKg: lote.cantidad,
+            }),
+          );
+        }
+      }
+
+      // 2. CREAR LOTE FINAL
+      const deposito = await this.depRepo.findOne({
+        where: { id: depositoDestinoId, tenantId },
+      });
+
+      if (!deposito) {
+        throw new NotFoundException('Depósito no encontrado');
+      }
+
+      // Normalizamos fecha "date" (sin hora) para que Postgres guarde bien
+      const fechaProduccion = new Date();
+      fechaProduccion.setHours(0, 0, 0, 0);
+
+      const codigoLote = `PF-${fechaProduccion
+        .toISOString()
+        .slice(0, 10)}-${orden.id.slice(-4)}`;
+
+      const productoFinal = orden.recetaVersion?.receta?.productoFinal;
+      if (!productoFinal) {
+        throw new BadRequestException(
+          'La receta no tiene ProductoFinal asignado (productoFinalId).',
         );
       }
-    }
 
-    // 2. CREAR LOTE FINAL
-    const deposito = await this.depRepo.findOne({
-      where: { id: depositoDestinoId, tenantId },
-    });
+      // Calcular vencimiento si hay vida útil
+      let fechaVencimiento: Date | null = null;
+      if (productoFinal.vidaUtilDias != null) {
+        const vida = Number(productoFinal.vidaUtilDias);
+        if (Number.isNaN(vida) || vida <= 0) {
+          throw new BadRequestException(
+            `vidaUtilDias inválida para el producto final ${productoFinal.codigo}`,
+          );
+        }
 
-    if (!deposito) {
-      throw new NotFoundException('Depósito no encontrado');
-    }
+        fechaVencimiento = new Date(fechaProduccion);
+        fechaVencimiento.setDate(fechaVencimiento.getDate() + vida);
+      }
 
-    const codigoLote = `PF-${new Date().toISOString().slice(0, 10)}-${orden.id.slice(-4)}`;
+      const loteFinal = this.lotePFRepo.create({
+        tenantId,
+        codigoLote,
+        fechaProduccion,
+        fechaVencimiento,
+        deposito,
+        cantidadInicialKg: cantidadKg, // ✅
+        cantidadActualKg: cantidadKg, // ✅
+        estado: LotePfEstado.RETENIDO,
+        fechaEstado: new Date(),
+        motivoEstado:
+          productoFinal.vidaUtilDias == null
+            ? 'Creado por producción (vida útil no definida)'
+            : 'Creado por producción (pendiente de liberación)',
+        productoFinal,
+      });
 
-    const productoFinal = orden.recetaVersion?.receta?.productoFinal;
-    if (!productoFinal) {
-      throw new BadRequestException(
-        'La receta no tiene ProductoFinal asignado (productoFinalId).',
+      await this.lotePFRepo.save(loteFinal);
+      loteFinalId = loteFinal.id;
+
+      // Movimiento ingreso
+      await this.stockService.ingresoLotePF(
+        tenantId,
+        loteFinal.id,
+        cantidadKg, // ✅
+        orden.id,
       );
+
+      orden.estado = 'finalizada';
+      orden.loteFinal = loteFinal;
+      await this.ordenRepo.save(orden);
+
+      await this.auditoria.registrar(
+        tenantId,
+        usuarioId,
+        'ORDEN_PRODUCCION_FINALIZADA',
+        { ordenId: orden.id },
+      );
+
+      return this.obtener(tenantId, orden.id);
+    } catch (e) {
+      if (loteFinalId) {
+        await this.lotePFRepo.delete({ id: loteFinalId, tenantId });
+      }
+      orden.estado = 'pendiente';
+      await this.ordenRepo.save(orden);
+      throw e;
     }
-
-    const loteFinal = this.lotePFRepo.create({
-      tenantId,
-      codigoLote,
-      fechaProduccion: new Date(),
-      deposito,
-      cantidadInicialKg: orden.cantidadKg,
-      cantidadActualKg: orden.cantidadKg,
-      estado: LotePfEstado.RETENIDO,
-      fechaEstado: new Date(),
-      motivoEstado: 'Creado por producción (pendiente de liberación)',
-      productoFinal,
-    });
-
-    await this.lotePFRepo.save(loteFinal);
-
-    // Movimiento ingreso
-    await this.stockService.ingresoLotePF?.(
-      tenantId,
-      loteFinal.id,
-      orden.cantidadKg,
-      orden.id,
-    );
-
-    orden.estado = 'finalizada';
-    orden.loteFinal = loteFinal;
-    await this.ordenRepo.save(orden);
-
-    await this.auditoria.registrar(
-      tenantId,
-      usuarioId,
-      'ORDEN_PRODUCCION_FINALIZADA',
-      { ordenId: orden.id },
-    );
-
-    return this.obtener(tenantId, orden.id);
   }
 
   /** ============================
@@ -209,7 +264,7 @@ export class OrdenesProduccionService {
         'ingredientes.consumos',
         'ingredientes.consumos.lote',
         'loteFinal',
-        
+
         'loteFinal.productoFinal',
       ],
     });

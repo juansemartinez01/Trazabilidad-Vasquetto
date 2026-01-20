@@ -1,3 +1,4 @@
+// dto/create-entrega.dto.ts
 import {
   IsString,
   IsUUID,
@@ -12,24 +13,33 @@ import { Type } from 'class-transformer';
 
 export class CrearEntregaItemDto {
   @IsUUID()
-  loteId: string;
-
-  @IsUUID()
   depositoId: string;
-  // ✅ nuevo
+
   @IsOptional()
   @IsUUID()
   presentacionId?: string;
 
-  // ahora opcional: si viene presentacionId (no KG), lo calculamos
+  // ✅ FEFO granel: objetivo PF (si no mandás loteId)
+  @IsOptional()
+  @IsUUID()
+  productoFinalId?: string;
+
+  // ✅ modo manual (si querés permitirlo)
+  @IsOptional()
+  @IsUUID()
+  loteId?: string;
+
+  // granel (y presentacion KG)
   @IsOptional()
   @IsNumber()
   @Min(0.1)
   cantidadKg?: number;
 
+  // bulto/unidad (bolsas)
+  @IsOptional()
   @IsNumber()
   @Min(1)
-  cantidadBultos: number;
+  cantidadBultos?: number;
 }
 
 export class CrearEntregaDto {

@@ -71,7 +71,6 @@ export class EntregasService {
       const loteRepo = trx.getRepository(LoteProductoFinal);
       const depRepo = trx.getRepository(Deposito);
       const presRepo = trx.getRepository(PresentacionProductoFinal);
-      const stockPresRepo = trx.getRepository(StockPresentacion);
       const unidadRepo = trx.getRepository(PFUnidadEnvasada);
       const movRepo = trx.getRepository(StockMovimiento);
 
@@ -88,51 +87,18 @@ export class EntregasService {
         chofer: { id: dto.choferId },
         observaciones: dto.observaciones,
       });
-
       await entregaRepo.save(entrega);
 
       for (const item of dto.items) {
-        const lote = await loteRepo.findOne({
-          where: { id: item.loteId, tenantId },
-          relations: ['productoFinal', 'deposito'], // ✅ para validaciones y origen stock
-        });
-        if (!lote) throw new NotFoundException('Lote no encontrado');
-
-        // 1) Validación vencimiento + estado LISTO (tu lógica OK)
-        if (lote.fechaVencimiento) {
-          const hoy = new Date();
-          const vencimiento = new Date(lote.fechaVencimiento);
-          hoy.setHours(0, 0, 0, 0);
-          vencimiento.setHours(0, 0, 0, 0);
-
-          if (vencimiento < hoy) {
-            if (lote.estado !== LotePfEstado.VENCIDO) {
-              lote.estado = LotePfEstado.VENCIDO;
-              lote.motivoEstado = 'Vencido al intentar entregar';
-              lote.fechaEstado = new Date();
-              await loteRepo.save(lote);
-            }
-            throw new BadRequestException(
-              `El lote ${lote.codigoLote} está vencido`,
-            );
-          }
-        }
-
-        if (lote.estado !== LotePfEstado.LISTO) {
-          throw new BadRequestException(
-            `El lote ${lote.codigoLote} no está LISTO (estado actual: ${lote.estado})`,
-          );
-        }
-
-        // 2) Depósito (depósito “operativo” de entrega)
         const deposito = await depRepo.findOne({
           where: { id: item.depositoId, tenantId },
         });
         if (!deposito) throw new NotFoundException('Depósito no encontrado');
 
-        // 3) Presentación (opcional)
+        // ============================
+        // 1) Resolver presentación (si viene)
+        // ============================
         let presentacion: PresentacionProductoFinal | null = null;
-
         if (item.presentacionId) {
           presentacion = await presRepo.findOne({
             where: { id: item.presentacionId, tenantId },
@@ -140,247 +106,223 @@ export class EntregasService {
           });
           if (!presentacion)
             throw new NotFoundException('Presentación no encontrada');
-
-          // ✅ coherencia: presentación pertenece al PF del lote
-          const pfLoteId = lote.productoFinal?.id;
-          const pfPresId = presentacion.productoFinal?.id;
-
-          if (!pfLoteId) {
-            throw new BadRequestException(
-              `El lote ${lote.codigoLote} no tiene ProductoFinal asociado`,
-            );
-          }
-          if (pfPresId !== pfLoteId) {
-            throw new BadRequestException(
-              `La presentación ${presentacion.codigo} no pertenece al ProductoFinal del lote ${lote.codigoLote}`,
-            );
-          }
         }
 
         // ============================
-        // CAMINO A: ENTREGA A GRANEL (SIN PRESENTACIÓN)
+        // 2) CASO: PRESENTACIÓN KG => SE TRATA COMO GRANEL (FEFO LOTE PF)
         // ============================
-        if (!presentacion) {
-          if (item.cantidadKg == null) {
+        const esPresKg =
+          !!presentacion && presentacion.unidadVenta === UnidadVenta.KG;
+
+        // ============================
+        // 3) CASO GRANEL (sin pres) O (pres KG)
+        // ============================
+        if (!presentacion || esPresKg) {
+          const kg = Number(item.cantidadKg ?? 0);
+          if (!Number.isFinite(kg) || kg <= 0) {
             throw new BadRequestException(
-              'cantidadKg es requerida si no se envía presentacionId',
+              'cantidadKg es requerida y debe ser > 0',
             );
           }
 
-          const kgADescontar = Number(item.cantidadKg);
-          if (kgADescontar <= 0) {
+          // objetivo PF: por item.productoFinalId, o por presentacion.productoFinal.id, o modo manual loteId
+          let productoFinalId: string | null = item.productoFinalId ?? null;
+          if (!productoFinalId && presentacion?.productoFinal?.id)
+            productoFinalId = presentacion.productoFinal.id;
+
+          // Modo manual: si mandan loteId, consumimos ese lote directamente
+          if (item.loteId) {
+            const lote = await loteRepo.findOne({
+              where: { id: item.loteId, tenantId },
+              relations: ['productoFinal', 'deposito'],
+            });
+            if (!lote) throw new NotFoundException('Lote no encontrado');
+
+            // validación estado/vencimiento como la tuya
+            await this.validarLoteEntregable(
+              trx,
+              tenantId,
+              lote,
+              dto.numeroRemito,
+            );
+
+            if (Number(lote.cantidadActualKg) < kg) {
+              throw new BadRequestException(
+                `Stock insuficiente en lote ${lote.codigoLote} (disp ${lote.cantidadActualKg}, req ${kg})`,
+              );
+            }
+
+            const loteActualizado = await this.stockService.consumirLotePF(
+              tenantId,
+              lote.id,
+              kg,
+              TipoMovimiento.ENTREGA,
+              entrega.id,
+            );
+
+            await itemRepo.save(
+              itemRepo.create({
+                tenantId,
+                entrega,
+                lote,
+                deposito,
+                presentacion: presentacion ?? null, // si era pres KG, dejamos trazado el SKU vendido
+                cantidadKg: kg,
+                cantidadBultos: Number(item.cantidadBultos ?? 0),
+              }),
+            );
+
+            if (Number(loteActualizado.cantidadActualKg) <= 0) {
+              loteActualizado.estado = LotePfEstado.ENTREGADO;
+              loteActualizado.motivoEstado = `Entregado (remito ${dto.numeroRemito})`;
+              loteActualizado.fechaEstado = new Date();
+              await loteRepo.save(loteActualizado);
+            }
+
+            continue;
+          }
+
+          if (!productoFinalId) {
             throw new BadRequestException(
-              'La cantidad a descontar debe ser > 0',
+              'Para entrega granel FEFO debe venir productoFinalId (o loteId)',
             );
           }
 
-          if (Number(lote.cantidadActualKg) < kgADescontar) {
-            throw new BadRequestException(
-              `Stock insuficiente en lote ${lote.codigoLote} (disponible ${lote.cantidadActualKg}, requerido ${kgADescontar})`,
-            );
-          }
-
-          // descontar del lote PF (granel)
-          const loteActualizado = await this.stockService.consumirLotePF(
+          // ✅ FEFO automático por PF
+          const plan = await this.planConsumoGranelFEFO(
+            trx,
             tenantId,
-            lote.id,
-            kgADescontar,
-            TipoMovimiento.ENTREGA,
-            entrega.id,
+            productoFinalId,
+            kg,
           );
 
-          const entregaItem = itemRepo.create({
-            tenantId,
-            entrega,
-            lote,
-            deposito,
-            presentacion: null,
-            cantidadKg: kgADescontar,
-            cantidadBultos: Number(item.cantidadBultos ?? 0),
-          });
-          await itemRepo.save(entregaItem);
+          for (const p of plan) {
+            await this.validarLoteEntregable(
+              trx,
+              tenantId,
+              p.lote,
+              dto.numeroRemito,
+            );
 
-          if (Number(loteActualizado.cantidadActualKg) <= 0) {
-            loteActualizado.estado = LotePfEstado.ENTREGADO;
-            loteActualizado.motivoEstado = `Entregado (remito ${dto.numeroRemito})`;
-            loteActualizado.fechaEstado = new Date();
-            await loteRepo.save(loteActualizado);
+            const loteActualizado = await this.stockService.consumirLotePF(
+              tenantId,
+              p.lote.id,
+              p.kg,
+              TipoMovimiento.ENTREGA,
+              entrega.id,
+            );
+
+            await itemRepo.save(
+              itemRepo.create({
+                tenantId,
+                entrega,
+                lote: p.lote,
+                deposito,
+                presentacion: presentacion ?? null, // ✅ si era pres KG, queda asociado
+                cantidadKg: p.kg,
+                cantidadBultos: 0,
+              }),
+            );
+
+            if (Number(loteActualizado.cantidadActualKg) <= 0) {
+              loteActualizado.estado = LotePfEstado.ENTREGADO;
+              loteActualizado.motivoEstado = `Entregado (remito ${dto.numeroRemito})`;
+              loteActualizado.fechaEstado = new Date();
+              await loteRepo.save(loteActualizado);
+            }
           }
 
           continue;
         }
 
         // ============================
-        // CAMINO B: ENTREGA POR PRESENTACIÓN
-        // - NO descuenta del lote PF (porque ya se empacó)
-        // - descuenta de stock_presentaciones
-        // - si BULTO/UNIDAD: marca unidades envasadas como ENTREGADO
+        // 4) CASO ENVASADO (BULTO/UNIDAD) => FEFO por unidades envasadas
         // ============================
-
-        if (presentacion.unidadVenta === UnidadVenta.KG) {
-          // requiere cantidadKg
-          if (item.cantidadKg == null) {
-            throw new BadRequestException(
-              `cantidadKg es requerida para la presentación ${presentacion.codigo} (unidad KG)`,
-            );
-          }
-
-          const kg = Number(item.cantidadKg);
-          if (kg <= 0)
-            throw new BadRequestException(
-              'La cantidad a entregar debe ser > 0',
-            );
-
-          // descontar de stock_presentaciones (KG)
-          let stock = await stockPresRepo.findOne({
-            where: {
-              tenantId,
-              presentacion: { id: presentacion.id } as any,
-              deposito: { id: deposito.id } as any,
-            },
-          });
-
-          if (!stock) {
-            throw new BadRequestException(
-              `No hay stock en presentación ${presentacion.codigo} en el depósito seleccionado`,
-            );
-          }
-
-          const disponibleKg = dec(stock.stockKg);
-          if (disponibleKg < kg) {
-            throw new BadRequestException(
-              `Stock insuficiente en presentación ${presentacion.codigo} (disponible ${disponibleKg}, requerido ${kg})`,
-            );
-          }
-
-          stock.stockKg = disponibleKg - kg;
-          await stockPresRepo.save(stock);
-
-          // movimiento stock: entrega por presentación (kg)
-          await movRepo.save(
-            movRepo.create({
-              tenantId,
-              tipo: TipoMovimiento.ENTREGA,
-              lotePF: lote, // trazabilidad hacia lote origen
-              deposito,
-              presentacion,
-              cantidadKg: -kg,
-              cantidadUnidades: null,
-              referenciaId: entrega.id,
-            }),
-          );
-
-          // crear item entrega
-          const entregaItem = itemRepo.create({
-            tenantId,
-            entrega,
-            lote,
-            deposito,
-            presentacion,
-            cantidadKg: kg,
-            cantidadBultos: 0,
-          });
-          await itemRepo.save(entregaItem);
-
-          continue;
-        }
-
-        // BULTO / UNIDAD
         const bultos = Number(item.cantidadBultos ?? 0);
-        if (!bultos || bultos <= 0) {
+        if (!Number.isFinite(bultos) || bultos <= 0) {
           throw new BadRequestException(
-            `cantidadBultos es requerida para la presentación ${presentacion.codigo}`,
+            `cantidadBultos es requerida para ${presentacion.codigo}`,
           );
         }
 
         const peso = Number(presentacion.pesoPorUnidadKg ?? 0);
         if (!peso || peso <= 0) {
           throw new BadRequestException(
-            `La presentación ${presentacion.codigo} no tiene pesoPorUnidadKg configurado`,
+            `Presentación ${presentacion.codigo} requiere pesoPorUnidadKg`,
           );
         }
 
-        const kg = bultos * peso;
-        if (kg <= 0) {
-          throw new BadRequestException('La cantidad a entregar debe ser > 0');
-        }
-
-        // descontar de stock_presentaciones (UNIDADES)
-        let stock = await stockPresRepo.findOne({
-          where: {
-            tenantId,
-            presentacion: { id: presentacion.id } as any,
-            deposito: { id: deposito.id } as any,
-          },
-        });
-
-        if (!stock) {
-          throw new BadRequestException(
-            `No hay stock en presentación ${presentacion.codigo} en el depósito seleccionado`,
-          );
-        }
-
-        const disponibleUnits = dec(stock.stockUnidades);
-        if (disponibleUnits < bultos) {
-          throw new BadRequestException(
-            `Stock insuficiente en presentación ${presentacion.codigo} (disponible ${disponibleUnits}, requerido ${bultos})`,
-          );
-        }
-
-        stock.stockUnidades = disponibleUnits - bultos;
-        await stockPresRepo.save(stock);
-
-        // marcar unidades envasadas como ENTREGADO (selecciona N disponibles)
-        // Nota: esto asume que el stock por presentación refleja unidades envasadas disponibles.
-        const unidades = await unidadRepo.find({
-          where: {
-            tenantId,
-            deposito: { id: deposito.id } as any,
-            presentacion: { id: presentacion.id } as any,
-            loteOrigen: { id: lote.id } as any,
-            estado: 'DISPONIBLE' as any,
-          },
-          take: bultos,
-          order: { createdAt: 'ASC' as any },
-        });
-
-        if (unidades.length < bultos) {
-          // si pasa, es inconsistencia entre stock_presentaciones y unidades_envasadas
-          throw new BadRequestException(
-            `Inconsistencia: hay stock ${disponibleUnits} pero unidades DISPONIBLES encontradas ${unidades.length} para ${presentacion.codigo} en lote ${lote.codigoLote}`,
-          );
-        }
-
-        for (const u of unidades) {
-          u.estado = 'ENTREGADO' as any;
-        }
-        await unidadRepo.save(unidades);
-
-        // movimiento stock: entrega por presentación (unidades)
-        await movRepo.save(
-          movRepo.create({
-            tenantId,
-            tipo: TipoMovimiento.ENTREGA,
-            lotePF: lote,
-            deposito,
-            presentacion,
-            cantidadKg: -kg,
-            cantidadUnidades: bultos,
-            referenciaId: entrega.id,
-          }),
+        // Seleccionar unidades FEFO
+        const unidades = await this.seleccionarUnidadesFEFO(
+          trx,
+          tenantId,
+          presentacion.id,
+          deposito.id,
+          bultos,
         );
 
-        // crear item entrega
-        const entregaItem = itemRepo.create({
-          tenantId,
-          entrega,
-          lote,
-          deposito,
-          presentacion,
-          cantidadKg: kg, // normalizado
-          cantidadBultos: bultos,
-        });
-        await itemRepo.save(entregaItem);
+        // Marcar ENTREGADO
+        for (const u of unidades) u.estado = 'ENTREGADO' as any;
+        await unidadRepo.save(unidades);
+
+        // Agrupar por loteOrigen para trazabilidad perfecta
+        const mapPorLote = new Map<string, PFUnidadEnvasada[]>();
+        for (const u of unidades) {
+          const loteId = (u.loteOrigen as any)?.id;
+          if (!loteId) {
+            throw new BadRequestException(
+              'Unidad envasada sin loteOrigen (inconsistencia)',
+            );
+          }
+          if (!mapPorLote.has(loteId)) mapPorLote.set(loteId, []);
+          mapPorLote.get(loteId)!.push(u);
+        }
+
+        for (const [loteId, units] of mapPorLote.entries()) {
+          const lote = await loteRepo.findOne({
+            where: { id: loteId, tenantId },
+            relations: ['productoFinal', 'deposito'],
+          });
+          if (!lote) throw new NotFoundException('Lote origen no encontrado');
+
+          // validación estado/vencimiento (misma que granel)
+          await this.validarLoteEntregable(
+            trx,
+            tenantId,
+            lote,
+            dto.numeroRemito,
+          );
+
+          const cant = units.length;
+          const kg = cant * peso;
+
+          // Movimiento (referencia entrega) — trazabilidad hacia loteOrigen
+          await movRepo.save(
+            movRepo.create({
+              tenantId,
+              tipo: TipoMovimiento.ENTREGA,
+              lotePF: lote,
+              deposito,
+              presentacion,
+              cantidadKg: -kg,
+              cantidadUnidades: cant,
+              referenciaId: entrega.id,
+            }),
+          );
+
+          // Crear item (uno por lote origen)
+          await itemRepo.save(
+            itemRepo.create({
+              tenantId,
+              entrega,
+              lote,
+              deposito,
+              presentacion,
+              cantidadKg: kg,
+              cantidadBultos: cant,
+            }),
+          );
+        }
       }
 
       await this.auditoria.registrar(tenantId, usuarioId, 'ENTREGA_CREADA', {
@@ -389,6 +331,40 @@ export class EntregasService {
 
       return this.obtener(tenantId, entrega.id);
     });
+  }
+
+  private async validarLoteEntregable(
+    trx: any,
+    tenantId: string,
+    lote: LoteProductoFinal,
+    numeroRemito: string,
+  ) {
+    const loteRepo = trx.getRepository(LoteProductoFinal);
+
+    if (lote.fechaVencimiento) {
+      const hoy = new Date();
+      const vencimiento = new Date(lote.fechaVencimiento);
+      hoy.setHours(0, 0, 0, 0);
+      vencimiento.setHours(0, 0, 0, 0);
+
+      if (vencimiento < hoy) {
+        if (lote.estado !== LotePfEstado.VENCIDO) {
+          lote.estado = LotePfEstado.VENCIDO;
+          lote.motivoEstado = 'Vencido al intentar entregar';
+          lote.fechaEstado = new Date();
+          await loteRepo.save(lote);
+        }
+        throw new BadRequestException(
+          `El lote ${lote.codigoLote} está vencido`,
+        );
+      }
+    }
+
+    if (lote.estado !== LotePfEstado.LISTO) {
+      throw new BadRequestException(
+        `El lote ${lote.codigoLote} no está LISTO (estado actual: ${lote.estado})`,
+      );
+    }
   }
 
   /** ============================
@@ -435,5 +411,115 @@ export class EntregasService {
       where: { tenantId, lote: { id: loteId } },
       relations: ['entrega', 'entrega.cliente', 'presentacion'],
     });
+  }
+
+  private async seleccionarUnidadesFEFOConLock(
+    trx: any,
+    tenantId: string,
+    presentacionId: string,
+    depositoId: string,
+    bultos: number,
+  ) {
+    const unidadRepo = trx.getRepository(PFUnidadEnvasada);
+
+    // ✅ lock pesimista (evita que otra transacción tome las mismas unidades)
+    const unidades = await unidadRepo
+      .createQueryBuilder('u')
+      .setLock('pessimistic_write')
+      .innerJoinAndSelect('u.loteOrigen', 'l')
+      .where('u.tenant_id = :tenantId', { tenantId })
+      .andWhere('u.presentacion_id = :presentacionId', { presentacionId }) // ✅ usa la FK real
+      .andWhere('u.deposito_id = :depositoId', { depositoId }) // ✅ usa la FK real
+      .andWhere('u.estado = :estado', { estado: 'DISPONIBLE' })
+      .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
+      .addOrderBy('l.fecha_produccion', 'ASC')
+      .addOrderBy('u.created_at', 'ASC')
+      .take(bultos)
+      .getMany();
+
+    if (unidades.length < bultos) {
+      throw new BadRequestException(
+        `Stock insuficiente de unidades envasadas (requerido ${bultos}, disponible ${unidades.length})`,
+      );
+    }
+
+    return unidades;
+  }
+
+  private async planConsumoGranelFEFO(
+    trx: any,
+    tenantId: string,
+    productoFinalId: string,
+    kgRequeridos: number,
+  ) {
+    const loteRepo = trx.getRepository(LoteProductoFinal);
+
+    const lotes = await loteRepo
+      .createQueryBuilder('l')
+      .leftJoinAndSelect('l.productoFinal', 'pf')
+      .leftJoinAndSelect('l.deposito', 'dep')
+      .where('l.tenant_id = :tenantId', { tenantId })
+      .andWhere('pf.id = :pfId', { pfId: productoFinalId })
+      .andWhere('l.estado = :estado', { estado: LotePfEstado.LISTO })
+      .andWhere('COALESCE(l.cantidad_actual_kg, 0) > 0')
+      .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
+      .addOrderBy('l.fecha_produccion', 'ASC')
+      .addOrderBy('l.created_at', 'ASC')
+      .getMany();
+
+    let restante = kgRequeridos;
+    const plan: Array<{ lote: LoteProductoFinal; kg: number }> = [];
+
+    for (const lote of lotes) {
+      if (restante <= 0) break;
+      const disp = Number(lote.cantidadActualKg ?? 0);
+      if (disp <= 0) continue;
+
+      const usar = Math.min(disp, restante);
+      plan.push({ lote, kg: usar });
+      restante -= usar;
+    }
+
+    if (restante > 0) {
+      throw new BadRequestException(
+        `Stock insuficiente FEFO para PF ${productoFinalId} (faltan ${restante} kg)`,
+      );
+    }
+
+    return plan;
+  }
+
+  private async seleccionarUnidadesFEFO(
+    trx: any,
+    tenantId: string,
+    presentacionId: string,
+    depositoId: string,
+    bultos: number,
+  ) {
+    const unidadRepo = trx.getRepository(PFUnidadEnvasada);
+
+    // Traemos más info: loteOrigen para ordenar FEFO
+    const unidades = await unidadRepo
+      .createQueryBuilder('u')
+      .leftJoinAndSelect('u.loteOrigen', 'l')
+      .leftJoinAndSelect('u.presentacion', 'p')
+      .leftJoinAndSelect('u.deposito', 'd')
+      .where('u.tenant_id = :tenantId', { tenantId })
+      .andWhere('p.id = :presentacionId', { presentacionId })
+      .andWhere('d.id = :depositoId', { depositoId })
+      .andWhere('u.estado = :estado', { estado: 'DISPONIBLE' })
+      .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
+      .addOrderBy('l.fecha_produccion', 'ASC')
+      .addOrderBy('u.created_at', 'ASC')
+      .take(bultos)
+      .getMany();
+
+    if (unidades.length < bultos) {
+      throw new BadRequestException(
+        `Stock insuficiente de unidades envasadas (requerido ${bultos}, disponible ${unidades.length})`,
+      );
+    }
+
+    return unidades;
   }
 }

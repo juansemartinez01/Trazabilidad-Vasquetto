@@ -12,6 +12,7 @@ import { Deposito } from '../deposito/entities/deposito.entity';
 import { PresentacionProductoFinal } from '../producto-final/entities/presentacion-producto-final.entity';
 import { StockMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
 import { AuditoriaModule } from '../auditoria/auditoria.module';
+import { InsumoModule } from '../insumo/insumo.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { AuditoriaModule } from '../auditoria/auditoria.module';
       StockMovimiento,
     ]),
     AuditoriaModule,
+    InsumoModule,
   ],
   providers: [EmpaquesService],
   controllers: [EmpaquesController, EmpaquesStockController],

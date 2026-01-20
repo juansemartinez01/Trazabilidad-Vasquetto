@@ -38,6 +38,13 @@ export class InsumoController {
     return this.service.findOne(id, req.tenantId);
   }
 
+  // ✅ NUEVO: insumos por debajo del stock mínimo
+  @UseGuards(AuthGuard)
+  @Get('minimos/bajo')
+  bajoMinimo(@Req() req) {
+    return this.service.insumosBajoMinimo(req.tenantId);
+  }
+
   @UseGuards(AuthGuard)
   @Put(':id')
   update(

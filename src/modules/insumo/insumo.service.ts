@@ -27,6 +27,43 @@ export class InsumoService {
     });
   }
 
+  async insumosBajoMinimo(tenantId: string) {
+    // Solo los que tienen stockMinimo definido y > 0, y stockActual < stockMinimo
+    const rows = await this.repo
+      .createQueryBuilder('i')
+      .select([
+        'i.id AS "insumoId"',
+        'i.nombre AS "nombre"',
+        'i.unidad AS "unidad"',
+        'COALESCE(i.stockActual, 0) AS "stockActual"',
+        'COALESCE(i.stockMinimo, 0) AS "stockMinimo"',
+        '(COALESCE(i.stockMinimo, 0) - COALESCE(i.stockActual, 0)) AS "faltante"',
+      ])
+      .where('i.tenant_id = :tenantId', { tenantId })
+      .andWhere('i.stockMinimo IS NOT NULL')
+      .andWhere('COALESCE(i.stockMinimo, 0) > 0')
+      .andWhere('COALESCE(i.stockActual, 0) < COALESCE(i.stockMinimo, 0)')
+      .orderBy('"faltante"', 'DESC')
+      .getRawMany<{
+        insumoId: string;
+        nombre: string;
+        unidad: string;
+        stockActual: string;
+        stockMinimo: string;
+        faltante: string;
+      }>();
+
+    // Normalizar a number
+    return rows.map((r) => ({
+      insumoId: r.insumoId,
+      nombre: r.nombre,
+      unidad: r.unidad,
+      stockActual: Number(r.stockActual ?? 0),
+      stockMinimo: Number(r.stockMinimo ?? 0),
+      faltante: Math.max(0, Number(r.faltante ?? 0)),
+    }));
+  }
+
   async findOne(id: string, tenantId: string) {
     const item = await this.repo.findOne({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Insumo no encontrado');

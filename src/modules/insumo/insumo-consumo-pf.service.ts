@@ -199,6 +199,9 @@ export class InsumoConsumoPfService {
     // Traemos ambas capas
     const rows = await this.repo
       .createQueryBuilder('r')
+      .leftJoinAndSelect('r.insumo', 'i') // ✅ clave
+      .leftJoinAndSelect('r.productoFinal', 'pf') // opcional
+      .leftJoinAndSelect('r.presentacion', 'pres') // opcional
       .where('r.tenant_id = :tenantId', { tenantId })
       .andWhere('r.activo = true')
       .andWhere(
@@ -217,6 +220,7 @@ export class InsumoConsumoPfService {
         }),
       )
       .getMany();
+
 
     // Prioridad: si hay presentacion, pisa por insumoId
     const map = new Map<string, InsumoConsumoPF>();

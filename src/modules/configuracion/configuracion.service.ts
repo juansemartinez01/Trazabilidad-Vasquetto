@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { ConfiguracionOperativa } from './entities/configuracion-operativa.entity';
 import { StockMinimoMP } from './entities/stock-minimo-mp.entity';
 import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
+import { StockMinimoPF } from './entities/stock-minimo-pf.entity';
+import { ProductoFinal } from '../producto-final/entities/producto-final.entity';
 
 @Injectable()
 export class ConfiguracionService {
@@ -14,6 +16,13 @@ export class ConfiguracionService {
     private minMpRepo: Repository<StockMinimoMP>,
     @InjectRepository(MateriaPrima)
     private mpRepo: Repository<MateriaPrima>,
+
+    // ✅ NUEVO PF
+    @InjectRepository(StockMinimoPF)
+    private minPfRepo: Repository<StockMinimoPF>,
+
+    @InjectRepository(ProductoFinal)
+    private pfRepo: Repository<ProductoFinal>,
   ) {}
 
   async getOperativa(tenantId: string) {
@@ -58,5 +67,35 @@ export class ConfiguracionService {
 
   listarStockMinimoMP(tenantId: string) {
     return this.minMpRepo.find({ where: { tenantId } });
+  }
+
+  // =========================
+  //   ✅ STOCK MINIMO PF
+  // =========================
+  async setStockMinimoPF(
+    tenantId: string,
+    productoFinalId: string,
+    stockMinKg: number,
+  ) {
+    const pf = await this.pfRepo.findOne({
+      where: { id: productoFinalId, tenantId },
+    });
+    if (!pf) throw new NotFoundException('Producto final no encontrado');
+
+    let row = await this.minPfRepo.findOne({
+      where: { tenantId, productoFinal: { id: productoFinalId } },
+    });
+
+    if (!row) {
+      row = this.minPfRepo.create({ tenantId, productoFinal: pf, stockMinKg });
+    } else {
+      row.stockMinKg = stockMinKg as any;
+    }
+
+    return this.minPfRepo.save(row);
+  }
+
+  listarStockMinimoPF(tenantId: string) {
+    return this.minPfRepo.find({ where: { tenantId } });
   }
 }

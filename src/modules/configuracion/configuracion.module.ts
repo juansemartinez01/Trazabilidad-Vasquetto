@@ -8,6 +8,8 @@ import { ConfiguracionOperativa } from './entities/configuracion-operativa.entit
 import { StockMinimoMP } from './entities/stock-minimo-mp.entity';
 
 import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
+import { StockMinimoPF } from './entities/stock-minimo-pf.entity';
+import { ProductoFinal } from '../producto-final/entities/producto-final.entity';
 
 @Module({
   imports: [
@@ -15,6 +17,9 @@ import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
       ConfiguracionOperativa,
       StockMinimoMP,
       MateriaPrima,
+      StockMinimoPF,
+      ProductoFinal,
+
     ]),
   ],
   controllers: [ConfiguracionController],

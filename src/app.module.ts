@@ -29,6 +29,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { EmpaquesModule } from './modules/empaques/empaques.module';
 import { FilesModule } from './modules/files/files.module';
+import { TransferenciasModule } from './modules/transferencias/transferencias.module';
 
 
 @Module({
@@ -57,6 +58,7 @@ import { FilesModule } from './modules/files/files.module';
     RolesModule,
     EmpaquesModule,
     FilesModule,
+    TransferenciasModule
     // acá vamos a ir agregando módulos
   ],
   providers: [

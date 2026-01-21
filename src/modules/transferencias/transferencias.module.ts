@@ -9,6 +9,7 @@ import { TransferenciasService } from './transferencias.service';
 // Entidades propias
 import { Transferencia } from './entities/transferencia.entity';
 import { TransferenciaItem } from './entities/transferencia-item.entity';
+import { TransferenciaUnidad } from './entities/transferencia-unidad.entity'; // ✅ AGREGAR
 
 // Entidades relacionadas
 import { Deposito } from '../deposito/entities/deposito.entity';
@@ -16,11 +17,12 @@ import { LoteMP } from '../lotes/entities/lote-mp.entity';
 import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
 import { StockMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
 
-// Envasado / presentaciones
+// Presentación / unidades
+import { PresentacionProductoFinal } from '../producto-final/entities/presentacion-producto-final.entity';
 import { StockPresentacion } from '../empaques/entities/stock-presentacion.entity';
 import { PFUnidadEnvasada } from '../empaques/entities/pf-unidad-envasada.entity';
 
-// Si tu TransferenciasService registra auditoría:
+// Auditoría (si aplica)
 import { AuditoriaModule } from '../auditoria/auditoria.module';
 
 @Module({
@@ -28,17 +30,16 @@ import { AuditoriaModule } from '../auditoria/auditoria.module';
     TypeOrmModule.forFeature([
       Transferencia,
       TransferenciaItem,
+      TransferenciaUnidad, // ✅ CLAVE
 
       Deposito,
       LoteMP,
       LoteProductoFinal,
-      StockMovimiento,
-
-      StockPresentacion,
+      PresentacionProductoFinal,
       PFUnidadEnvasada,
+      StockPresentacion,
+      StockMovimiento,
     ]),
-
-    // ✅ Si AuditoriaService vive en AuditoriaModule y este exporta el service:
     forwardRef(() => AuditoriaModule),
   ],
   controllers: [TransferenciasController],

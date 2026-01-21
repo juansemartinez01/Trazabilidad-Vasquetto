@@ -28,6 +28,15 @@ import { InsumoMovimiento, TipoMovimientoInsumo } from '../insumo/entities/insum
 
 import { InsumoConsumoPfService } from '../insumo/insumo-consumo-pf.service';
 
+import { QueryUnidadesEnvasadasDto } from './dto/query-unidades-envasadas.dto';
+
+
+type GrupoKey = { loteId: string; presentacionId: string; depositoId: string };
+
+function keyOf(g: GrupoKey) {
+  return `${g.loteId}::${g.presentacionId}::${g.depositoId}`;
+}
+
 function dec(n: any) {
   const v = Number(n);
   if (Number.isNaN(v)) return 0;
@@ -655,4 +664,177 @@ export class EmpaquesService {
       where: { tenantId },
     });
   }
+
+
+
+
+async unidadesEnvasadasAgrupadas(tenantId: string, q: QueryUnidadesEnvasadasDto) {
+  const unidadesLimit = q.unidadesLimit ?? 200;   // default sano
+  const unidadesOffset = q.unidadesOffset ?? 0;
+
+  // 1) GRUPOS + TOTALES
+  const qb = this.unidadRepo
+    .createQueryBuilder('u')
+    .innerJoin('u.loteOrigen', 'l')
+    .innerJoin('u.presentacion', 'p')
+    .innerJoin('u.deposito', 'd')
+    .where('u.tenant_id = :tenantId', { tenantId });
+
+  if (q.loteId) qb.andWhere('l.id = :loteId', { loteId: q.loteId });
+  if (q.presentacionId) qb.andWhere('p.id = :presentacionId', { presentacionId: q.presentacionId });
+  if (q.depositoId) qb.andWhere('d.id = :depositoId', { depositoId: q.depositoId });
+  if (q.estado) qb.andWhere('u.estado = :estado', { estado: q.estado });
+
+  const gruposRaw = await qb
+    .select([
+      'l.id AS "loteId"',
+      'l.codigo_lote AS "loteCodigo"',
+      'l.fecha_vencimiento AS "loteFechaVencimiento"',
+      'l.fecha_produccion AS "loteFechaProduccion"',
+      'l.estado AS "loteEstado"',
+
+      'p.id AS "presentacionId"',
+      'p.codigo AS "presentacionCodigo"',
+      'p.nombre AS "presentacionNombre"',
+
+      'd.id AS "depositoId"',
+      'd.nombre AS "depositoNombre"',
+
+      'COUNT(*)::int AS "total"',
+      `SUM(CASE WHEN u.estado = 'DISPONIBLE' THEN 1 ELSE 0 END)::int AS "disponibles"`,
+      `SUM(CASE WHEN u.estado = 'ENTREGADO' THEN 1 ELSE 0 END)::int AS "entregadas"`,
+      `SUM(CASE WHEN u.estado = 'ANULADO' THEN 1 ELSE 0 END)::int AS "anuladas"`,
+      `SUM(CASE WHEN u.estado = 'MERMA' THEN 1 ELSE 0 END)::int AS "merma"`,
+    ])
+    .groupBy('l.id')
+    .addGroupBy('l.codigo_lote')
+    .addGroupBy('l.fecha_vencimiento')
+    .addGroupBy('l.fecha_produccion')
+    .addGroupBy('l.estado')
+    .addGroupBy('p.id')
+    .addGroupBy('p.codigo')
+    .addGroupBy('p.nombre')
+    .addGroupBy('d.id')
+    .addGroupBy('d.nombre')
+    .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
+    .addOrderBy('l.fecha_produccion', 'ASC')
+    .addOrderBy('l.codigo_lote', 'ASC')
+    .getRawMany();
+
+  if (!gruposRaw.length) return { data: [], unidadesLimit, unidadesOffset };
+
+  // 2) Traer UNIDADES de los grupos encontrados (limit/offset global)
+  //    Si querés limit por grupo, te lo armo, pero esto es excelente primera versión.
+  const keys: GrupoKey[] = gruposRaw.map((g: any) => ({
+    loteId: g.loteId,
+    presentacionId: g.presentacionId,
+    depositoId: g.depositoId,
+  }));
+
+  // Construimos ORs (Postgres) para traer solo esas combinaciones
+  const unidadesQb = this.unidadRepo
+    .createQueryBuilder('u')
+    .innerJoin('u.loteOrigen', 'l')
+    .innerJoin('u.presentacion', 'p')
+    .innerJoin('u.deposito', 'd')
+    .where('u.tenant_id = :tenantId', { tenantId });
+
+  // Reaplicamos filtros (por si vino estado)
+  if (q.estado) unidadesQb.andWhere('u.estado = :estado', { estado: q.estado });
+
+  // OR por combinaciones
+  keys.forEach((k, idx) => {
+    const cond = `(l.id = :l${idx} AND p.id = :p${idx} AND d.id = :d${idx})`;
+    if (idx === 0) unidadesQb.andWhere(cond);
+    else unidadesQb.orWhere(cond);
+
+    unidadesQb.setParameter(`l${idx}`, k.loteId);
+    unidadesQb.setParameter(`p${idx}`, k.presentacionId);
+    unidadesQb.setParameter(`d${idx}`, k.depositoId);
+  });
+
+  const unidades = await unidadesQb
+    .select([
+      'u.id',
+      'u.codigoEtiqueta',
+      'u.estado',
+      'u.pesoKg',
+      'u.createdAt',
+
+      'l.id',
+      'p.id',
+      'd.id',
+    ])
+    .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
+    .addOrderBy('l.fecha_produccion', 'ASC')
+    .addOrderBy('u.createdAt', 'ASC')
+    .offset(unidadesOffset)
+    .limit(unidadesLimit)
+    .getMany();
+
+  // 3) Agrupar en memoria para armar el payload final
+  const map = new Map<string, any>();
+
+  for (const g of gruposRaw as any[]) {
+    const k = keyOf({ loteId: g.loteId, presentacionId: g.presentacionId, depositoId: g.depositoId });
+
+    map.set(k, {
+      lote: {
+        id: g.loteId,
+        codigo: g.loteCodigo,
+        fechaVencimiento: g.loteFechaVencimiento,
+        fechaProduccion: g.loteFechaProduccion,
+        estado: g.loteEstado,
+      },
+      presentacion: {
+        id: g.presentacionId,
+        codigo: g.presentacionCodigo,
+        nombre: g.presentacionNombre,
+      },
+      deposito: {
+        id: g.depositoId,
+        nombre: g.depositoNombre,
+      },
+      totales: {
+        total: Number(g.total ?? 0),
+        disponibles: Number(g.disponibles ?? 0),
+        entregadas: Number(g.entregadas ?? 0),
+        anuladas: Number(g.anuladas ?? 0),
+        merma: Number(g.merma ?? 0),
+      },
+      unidades: [] as Array<{
+        id: string;
+        codigoEtiqueta: string;
+        estado: string;
+        pesoKg: any;
+        createdAt: any;
+      }>,
+    });
+  }
+
+  for (const u of unidades as PFUnidadEnvasada[]) {
+    const loteId = (u.loteOrigen as any)?.id;
+    const presId = (u.presentacion as any)?.id;
+    const depId = (u.deposito as any)?.id;
+    const k = keyOf({ loteId, presentacionId: presId, depositoId: depId });
+
+    const grp = map.get(k);
+    if (!grp) continue;
+
+    grp.unidades.push({
+      id: u.id,
+      codigoEtiqueta: u.codigoEtiqueta,
+      estado: u.estado,
+      pesoKg: u.pesoKg,
+      createdAt: (u as any).createdAt,
+    });
+  }
+
+  return {
+    data: Array.from(map.values()),
+    unidadesLimit,
+    unidadesOffset,
+  };
+}
+
 }

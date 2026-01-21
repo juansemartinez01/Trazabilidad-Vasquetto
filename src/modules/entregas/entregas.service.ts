@@ -253,7 +253,7 @@ export class EntregasService {
         }
 
         // Seleccionar unidades FEFO
-        const unidades = await this.seleccionarUnidadesFEFO(
+        const unidades = await this.seleccionarUnidadesFEFOConLock(
           trx,
           tenantId,
           presentacion.id,

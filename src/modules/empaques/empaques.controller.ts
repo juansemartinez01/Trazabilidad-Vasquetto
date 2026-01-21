@@ -14,6 +14,7 @@ import { EmpaquesService } from './empaques.service';
 import { CreateEmpaqueDto } from './dto/create-empaque.dto';
 import { AddEmpaqueItemDto } from './dto/add-empaque-item.dto';
 import { QueryEmpaquesDto } from './dto/query-empaques.dto';
+import { QueryUnidadesEnvasadasDto } from './dto/query-unidades-envasadas.dto';
 
 @Controller('empaques')
 export class EmpaquesController {
@@ -61,5 +62,11 @@ export class EmpaquesController {
   @Get(':id')
   obtener(@Req() req, @Param('id') id: string) {
     return this.service.obtener(req.tenantId, id);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('unidades-envasadas/agrupadas')
+  unidadesAgrupadas(@Req() req, @Query() q: QueryUnidadesEnvasadasDto) {
+    return this.service.unidadesEnvasadasAgrupadas(req.tenantId, q);
   }
 }

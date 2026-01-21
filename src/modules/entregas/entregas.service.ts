@@ -286,11 +286,10 @@ export class EntregasService {
           if (!lote) throw new NotFoundException('Lote origen no encontrado');
 
           // validación estado/vencimiento (misma que granel)
-          await this.validarLoteEntregable(
+          await this.validarLoteNoVencido(
             trx,
             tenantId,
-            lote,
-            dto.numeroRemito,
+            lote
           );
 
           const cant = units.length;
@@ -523,5 +522,33 @@ export class EntregasService {
     }
 
     return unidades;
+  }
+
+  private async validarLoteNoVencido(
+    trx: any,
+    tenantId: string,
+    lote: LoteProductoFinal,
+  ) {
+    const loteRepo = trx.getRepository(LoteProductoFinal);
+
+    if (lote.fechaVencimiento) {
+      const hoy = new Date();
+      const vencimiento = new Date(lote.fechaVencimiento);
+      hoy.setHours(0, 0, 0, 0);
+      vencimiento.setHours(0, 0, 0, 0);
+
+      if (vencimiento < hoy) {
+        // opcional: marcar vencido
+        if (lote.estado !== LotePfEstado.VENCIDO) {
+          lote.estado = LotePfEstado.VENCIDO;
+          lote.motivoEstado = 'Vencido al entregar envasado';
+          lote.fechaEstado = new Date();
+          await loteRepo.save(lote);
+        }
+        throw new BadRequestException(
+          `El lote ${lote.codigoLote} está vencido`,
+        );
+      }
+    }
   }
 }

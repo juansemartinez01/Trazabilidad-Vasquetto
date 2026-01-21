@@ -1,20 +1,25 @@
-import { Entity, Column, ManyToMany, JoinTable } from 'typeorm';
+import { Entity, Column, ManyToMany, JoinTable, Unique } from 'typeorm';
 import { TenantBaseEntity } from '../../../common/entities/tenant-base.entity';
 import { Rol } from '../../roles/entities/roles.entity';
 
 @Entity('usuarios')
+@Unique('ux_usuario_tenant_email', ['tenantId', 'email'])
 export class Usuario extends TenantBaseEntity {
   @Column()
   nombre: string;
 
-  @Column({ unique: true })
+  @Column()
   email: string;
 
-  @Column()
+  @Column({ select: false })
   claveHash: string;
 
   @ManyToMany(() => Rol)
-  @JoinTable()
+  @JoinTable({
+    name: 'usuario_rol',
+    joinColumn: { name: 'usuario_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'rol_id', referencedColumnName: 'id' },
+  })
   roles: Rol[];
 
   @Column({ default: true })

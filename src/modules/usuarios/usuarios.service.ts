@@ -25,8 +25,9 @@ export class UsuariosService {
   /** Crear usuario (tipo admin panel) */
   async crear(tenantId: string, dto: CreateUsuarioDto) {
     const existente = await this.usuariosRepo.findOne({
-      where: { email: dto.email },
+      where: { tenantId, email: dto.email },
     });
+
     if (existente) {
       throw new BadRequestException(
         `Ya existe un usuario con el email ${dto.email}`,
@@ -70,21 +71,22 @@ export class UsuariosService {
   listar(tenantId: string) {
     return this.usuariosRepo.find({
       where: { tenantId, activo: true },
+      relations: ['roles'],
+      order: { createdAt: 'DESC' as any },
     });
   }
 
-  /** Obtener un usuario por id */
   async obtenerUno(tenantId: string, id: string) {
     const usuario = await this.usuariosRepo.findOne({
       where: { id, tenantId },
+      relations: ['roles'],
     });
 
     if (!usuario || !usuario.activo) {
       throw new NotFoundException('Usuario no encontrado');
     }
 
-    delete (usuario as any).claveHash;
-    return usuario;
+    return usuario; // claveHash no viene por select:false
   }
 
   /** Actualizar usuario (nombre, email, roles, password) */
@@ -100,8 +102,9 @@ export class UsuariosService {
 
     if (dto.email && dto.email !== usuario.email) {
       const conflicto = await this.usuariosRepo.findOne({
-        where: { email: dto.email },
+        where: { tenantId, email: dto.email },
       });
+
       if (conflicto) {
         throw new BadRequestException(
           `Ya existe un usuario con el email ${dto.email}`,

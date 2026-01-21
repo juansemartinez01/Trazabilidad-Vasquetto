@@ -34,31 +34,41 @@ export class AuthService {
     return usuario;
   }
 
-  async login(email: string, password: string) {
-    const usuario = await this.usuariosRepo.findOne({
-      where: { email },
-      relations: ['roles'],
-    });
+  async login(email: string, password: string, tenantId: string) {
+    const usuario = await this.usuariosRepo
+      .createQueryBuilder('u')
+      .leftJoinAndSelect('u.roles', 'r')
+      .addSelect('u.claveHash') // 👈 porque está select:false
+      .where('u.email = :email', { email })
+      .andWhere('u.tenant_id = :tenantId', { tenantId })
+      .andWhere('u.activo = true')
+      .getOne();
 
     if (!usuario) throw new UnauthorizedException('Credenciales inválidas');
 
     const ok = await bcrypt.compare(password, usuario.claveHash);
-
     if (!ok) throw new UnauthorizedException('Credenciales inválidas');
 
     if (!process.env.JWT_SECRET) {
       throw new Error('JWT_SECRET environment variable is not defined');
     }
+
+    // ⚠️ no metas objetos enteros de roles en el token, mete nombres o ids
+    const roles = (usuario.roles ?? []).map((x) => x.nombre);
+
     const token = jwt.sign(
       {
         id: usuario.id,
         nombre: usuario.nombre,
-        roles: usuario.roles,
+        roles, // 👈 solo nombres
         tenantId: usuario.tenantId,
       },
-      process.env.JWT_SECRET as string,
+      process.env.JWT_SECRET,
       { expiresIn: '8h' },
     );
+
+    // ✅ limpiar hash antes de devolver
+    delete (usuario as any).claveHash;
 
     return { token, usuario };
   }

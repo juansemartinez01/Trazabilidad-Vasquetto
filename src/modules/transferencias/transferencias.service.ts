@@ -29,7 +29,6 @@ import { StockPresentacion } from '../empaques/entities/stock-presentacion.entit
 
 import { CreateTransferenciaDto } from './dto/create-transferencia.dto';
 
-// opcional: si querés registrar movimientos como en tu sistema actual
 import {
   StockMovimiento,
   TipoMovimiento,
@@ -107,7 +106,6 @@ export class TransferenciasService {
 
     const saved = await this.repo.save(t);
 
-    // Persistimos items en BORRADOR (validación suave ahora; fuerte en confirmar)
     for (const it of dto.items) {
       const item = this.itemRepo.create({
         tenantId,
@@ -197,17 +195,37 @@ export class TransferenciasService {
           if (kg <= 0)
             throw new BadRequestException('cantidadKg requerida para MP');
 
-          const lote = await trx.getRepository(LoteMP).findOne({
+          // ✅ LOCK SIN EAGER (evita LEFT JOIN + FOR UPDATE)
+          const lote = await loteMpRepo.findOne({
             where: { tenantId, id: it.loteMp.id },
             lock: { mode: 'pessimistic_write' },
+            loadEagerRelations: false,
           });
 
           if (!lote) throw new NotFoundException('Lote MP no encontrado');
 
-          if ((lote.deposito as any)?.id !== origen.id) {
+          // ✅ validar depósito por FK (sin joins)
+          const depositoId =
+            (lote as any).depositoId ?? (lote as any).deposito_id;
+          if (depositoId && depositoId !== origen.id) {
             throw new BadRequestException(
               `El lote MP ${lote.codigoLote} no pertenece al depósito origen`,
             );
+          }
+          // Si no tenés columna depositoId expuesta, validamos usando la relación pero SIN lock:
+          // (esto no rompe porque ya bloqueamos la fila de lote)
+          if (!depositoId) {
+            const dep = await loteMpRepo
+              .createQueryBuilder('l')
+              .select(['l.id', 'l.deposito_id'])
+              .where('l.tenant_id = :tenantId', { tenantId })
+              .andWhere('l.id = :id', { id: lote.id })
+              .getRawOne<{ l_deposito_id: string }>();
+            if (dep?.l_deposito_id !== origen.id) {
+              throw new BadRequestException(
+                `El lote MP ${lote.codigoLote} no pertenece al depósito origen`,
+              );
+            }
           }
 
           const disp = dec(lote.cantidadActualKg);
@@ -221,7 +239,7 @@ export class TransferenciasService {
           lote.cantidadActualKg = disp - kg;
           await loteMpRepo.save(lote);
 
-          // 2) crear lote destino (split) - recepcion es NOT NULL => copiamos la misma
+          // 2) crear lote destino (split)
           const codigoHijo = await this.generarCodigoSplitMP(
             trx,
             tenantId,
@@ -230,8 +248,8 @@ export class TransferenciasService {
 
           const nuevo = loteMpRepo.create({
             tenantId,
-            recepcion: lote.recepcion, // ✅ clave por NOT NULL
-            materiaPrima: lote.materiaPrima,
+            recepcion: (lote as any).recepcion, // NOT NULL
+            materiaPrima: (lote as any).materiaPrima,
             deposito: destino,
             codigoLote: codigoHijo,
             fechaElaboracion: lote.fechaElaboracion,
@@ -249,11 +267,11 @@ export class TransferenciasService {
           await movRepo.save(
             movRepo.create({
               tenantId,
-              tipo: TipoMovimiento.TRANSFERENCIA_MP,
-              loteMP: lote,
-              deposito: origen,
+              tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
+              loteMP: { id: lote.id } as any,
+              deposito: { id: origen.id } as any,
               cantidadKg: -kg,
-              referenciaId: t.id
+              referenciaId: t.id,
               
             }),
           );
@@ -261,15 +279,15 @@ export class TransferenciasService {
           await movRepo.save(
             movRepo.create({
               tenantId,
-              tipo: TipoMovimiento.TRANSFERENCIA_MP,
-              loteMP: loteDestino,
-              deposito: destino,
+              tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
+              loteMP: { id: loteDestino.id } as any,
+              deposito: { id: destino.id } as any,
               cantidadKg: +kg,
-              referenciaId: t.id
+              referenciaId: t.id,
+              
             }),
           );
 
-          // opcional: guardar algo en item.descripcion
           it.descripcion =
             it.descripcion ??
             `Split: ${lote.codigoLote} -> ${loteDestino.codigoLote}`;
@@ -277,6 +295,9 @@ export class TransferenciasService {
         }
       }
 
+      // =====================
+      // PF granel (split de lote)
+      // =====================
       if (t.tipo === TransferenciaTipo.PF_GRANEL) {
         for (const it of t.items) {
           const kg = dec(it.cantidadKg);
@@ -287,21 +308,28 @@ export class TransferenciasService {
               'cantidadKg requerida para PF_GRANEL',
             );
 
+          // ✅ LOCK SIN EAGER/RELATIONS
           const lote = await lotePfRepo.findOne({
             where: { tenantId, id: it.lotePf.id },
             lock: { mode: 'pessimistic_write' },
-            relations: ['deposito', 'productoFinal'],
+            loadEagerRelations: false,
           });
           if (!lote) throw new NotFoundException('Lote PF no encontrado');
 
-          if ((lote.deposito as any)?.id !== origen.id) {
+          const depositoId =
+            (lote as any).depositoId ?? (lote as any).deposito_id;
+          if (depositoId && depositoId !== origen.id) {
             throw new BadRequestException(
               `El lote PF ${lote.codigoLote} no pertenece al depósito origen`,
             );
           }
-          if (lote.estado !== LotePfEstado.LISTO) {
+
+          if (
+            (lote as any).estado &&
+            (lote as any).estado !== LotePfEstado.LISTO
+          ) {
             throw new BadRequestException(
-              `El lote ${lote.codigoLote} no está LISTO (estado: ${lote.estado})`,
+              `El lote ${lote.codigoLote} no está LISTO (estado: ${(lote as any).estado})`,
             );
           }
 
@@ -311,7 +339,7 @@ export class TransferenciasService {
               `Stock insuficiente en lote PF (disp ${disp}, req ${kg})`,
             );
 
-          // split: descuenta origen
+          // descuenta origen
           lote.cantidadActualKg = disp - kg;
           await lotePfRepo.save(lote);
 
@@ -327,52 +355,55 @@ export class TransferenciasService {
             cantidadInicialKg: kg,
             cantidadActualKg: kg,
             deposito: destino,
-            fechaProduccion: lote.fechaProduccion,
-            fechaVencimiento: lote.fechaVencimiento,
-            estado: LotePfEstado.LISTO, // sigue “LISTO” porque ya estaba liberado
+            fechaProduccion: (lote as any).fechaProduccion,
+            fechaVencimiento: (lote as any).fechaVencimiento,
+            estado: LotePfEstado.LISTO,
             motivoEstado: `Split desde ${lote.codigoLote} por transferencia ${t.id}`,
             fechaEstado: new Date(),
-            productoFinal: lote.productoFinal,
+            productoFinal: { id: (lote as any).productoFinalId } as any,
           });
 
           const loteDestino = await lotePfRepo.save(nuevo);
 
-          // movimiento de stock (interno)
           await movRepo.save(
             movRepo.create({
               tenantId,
-              tipo: TipoMovimiento.TRANSFERENCIA_PF as any, // asegurate de agregarlo al enum
-              lotePF: lote,
-              deposito: origen,
+              tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
+              lotePF: { id: lote.id } as any,
+              deposito: { id: origen.id } as any,
               cantidadKg: -kg,
               referenciaId: t.id,
+              
             }),
           );
           await movRepo.save(
             movRepo.create({
               tenantId,
               tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
-              lotePF: loteDestino,
-              deposito: destino,
+              lotePF: { id: loteDestino.id } as any,
+              deposito: { id: destino.id } as any,
               cantidadKg: +kg,
               referenciaId: t.id,
+              
             }),
           );
 
-          it.lotePf = lote; // dejamos trazado origen en el item
           it.cantidadKg = kg;
           await itemRepo.save(it);
         }
       }
 
+      // =====================
+      // PF envasado (move unidades)
+      // =====================
       if (t.tipo === TransferenciaTipo.PF_ENVASADO) {
         for (const it of t.items) {
-          if (!it.presentacion?.id)
+          if (!it.presentacion?.id) {
             throw new BadRequestException(
               'PF_ENVASADO requiere presentacionId',
             );
+          }
 
-          // recargar presentación (por si no viene eager)
           const pres = await presRepo.findOne({
             where: { tenantId, id: it.presentacion.id },
             relations: ['productoFinal'],
@@ -384,13 +415,15 @@ export class TransferenciasService {
             );
           }
 
-          const cant = dec(it.cantidadUnidades);
-          if (!Number.isFinite(cant) || cant <= 0)
+          const cant = Number(it.cantidadUnidades ?? 0);
+          if (!Number.isFinite(cant) || cant <= 0) {
             throw new BadRequestException(
               'cantidadUnidades requerida para PF_ENVASADO',
             );
+          }
 
           // FEFO: tomar unidades DISPONIBLE del depósito origen
+          // OJO: acá el lock está OK porque usamos INNER JOIN (no outer join)
           const unidades = await unidadRepo
             .createQueryBuilder('u')
             .setLock('pessimistic_write')
@@ -402,34 +435,34 @@ export class TransferenciasService {
             .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
             .addOrderBy('l.fecha_produccion', 'ASC')
             .addOrderBy('u.created_at', 'ASC')
-            .take(Number(cant))
+            .take(cant)
             .getMany();
 
-          if (unidades.length < Number(cant)) {
+          if (unidades.length < cant) {
             throw new BadRequestException(
               `Stock insuficiente de unidades envasadas (req ${cant}, disp ${unidades.length})`,
             );
           }
 
-          // mover unidades: cambia depósito (estado sigue DISPONIBLE)
+          // mover unidades: cambia depósito
           for (const u of unidades) {
-            (u as any).deposito = destino;
+            (u as any).deposito = { id: destino.id } as any;
           }
           await unidadRepo.save(unidades);
 
           // guardar detalle en transferencia_unidades
+          // ✅ usar referencia a transferencia por id (más estable dentro del trx)
           for (const u of unidades) {
             await tuRepo.save(
               tuRepo.create({
                 tenantId,
-                transferencia: t,
-                unidad: u,
+                transferencia: { id: t.id } as any,
+                unidad: { id: u.id } as any,
               }),
             );
           }
 
           // ajustar stock_presentaciones (origen -cant, destino +cant)
-          // (si no existe, se crea)
           const [stockO, stockD] = await Promise.all([
             stockPresRepo.findOne({
               where: {
@@ -438,6 +471,7 @@ export class TransferenciasService {
                 deposito: { id: origen.id } as any,
               },
               lock: { mode: 'pessimistic_write' },
+              loadEagerRelations: false,
             }),
             stockPresRepo.findOne({
               where: {
@@ -446,6 +480,7 @@ export class TransferenciasService {
                 deposito: { id: destino.id } as any,
               },
               lock: { mode: 'pessimistic_write' },
+              loadEagerRelations: false,
             }),
           ]);
 
@@ -469,11 +504,10 @@ export class TransferenciasService {
               stockUnidades: 0,
             });
 
-          so.stockUnidades = dec(so.stockUnidades) - Number(cant);
-          sd.stockUnidades = dec(sd.stockUnidades) + Number(cant);
+          so.stockUnidades = dec(so.stockUnidades) - cant;
+          sd.stockUnidades = dec(sd.stockUnidades) + cant;
 
           if (dec(so.stockUnidades) < 0) {
-            // por seguridad (si tu stockPres estaba desincronizado)
             throw new BadRequestException(
               'StockPresentacion origen quedó negativo (desincronización)',
             );
@@ -481,14 +515,12 @@ export class TransferenciasService {
 
           await stockPresRepo.save([so, sd]);
 
-          // movimiento (con trazabilidad por loteOrigen)
-          // peso por unidad está en PFUnidadEnvasada.pesoKg (todos iguales por presentación)
           const peso = dec(
             (unidades[0] as any)?.pesoKg ?? pres.pesoPorUnidadKg,
           );
-          const kgTotal = peso * Number(cant);
+          const kgTotal = peso * cant;
 
-          // para trazabilidad perfecta, agrupar por loteOrigen
+          // agrupar por loteOrigen
           const map = new Map<string, number>();
           for (const u of unidades) {
             const lid = (u.loteOrigen as any)?.id;
@@ -496,24 +528,19 @@ export class TransferenciasService {
           }
 
           for (const [loteId, unidadesCant] of map.entries()) {
-            const lote = await lotePfRepo.findOne({
-              where: { tenantId, id: loteId },
-              relations: ['deposito', 'productoFinal'],
-            });
-            if (!lote) continue;
-
             const kg = unidadesCant * peso;
 
             await movRepo.save(
               movRepo.create({
                 tenantId,
                 tipo: TipoMovimiento.TRANSFERENCIA_ENVASADO as any,
-                lotePF: lote,
-                deposito: origen,
-                presentacion: pres,
+                lotePF: { id: loteId } as any,
+                deposito: { id: origen.id } as any,
+                presentacion: { id: pres.id } as any,
                 cantidadKg: -kg,
                 cantidadUnidades: unidadesCant,
                 referenciaId: t.id,
+                
               }),
             );
 
@@ -521,18 +548,19 @@ export class TransferenciasService {
               movRepo.create({
                 tenantId,
                 tipo: TipoMovimiento.TRANSFERENCIA_ENVASADO as any,
-                lotePF: lote,
-                deposito: destino,
-                presentacion: pres,
+                lotePF: { id: loteId } as any,
+                deposito: { id: destino.id } as any,
+                presentacion: { id: pres.id } as any,
                 cantidadKg: +kg,
                 cantidadUnidades: unidadesCant,
                 referenciaId: t.id,
+                
               }),
             );
           }
 
           it.presentacion = pres;
-          it.cantidadUnidades = Number(cant);
+          it.cantidadUnidades = cant;
           it.cantidadKg = kgTotal;
           await itemRepo.save(it);
         }
@@ -554,7 +582,6 @@ export class TransferenciasService {
     codigoBase: string,
     pref: 'PF' | 'MP',
   ) {
-    // genera PF-...-T0001, PF-...-T0002, etc.
     const repo =
       pref === 'PF'
         ? trx.getRepository(LoteProductoFinal)
@@ -578,23 +605,26 @@ export class TransferenciasService {
     return `${base}${next}`;
   }
 
-  private async generarCodigoSplitMP(trx: any, tenantId: string, codigoBase: string) {
-  const repo = trx.getRepository(LoteMP);
-  const base = `${codigoBase}-T`;
+  private async generarCodigoSplitMP(
+    trx: any,
+    tenantId: string,
+    codigoBase: string,
+  ) {
+    const repo = trx.getRepository(LoteMP);
+    const base = `${codigoBase}-T`;
 
-  const rows = (await repo
-    .createQueryBuilder('l')
-    .select('l.codigo_lote', 'codigo')
-    .where('l.tenant_id = :tenantId', { tenantId })
-    .andWhere('l.codigo_lote LIKE :p', { p: `${base}%` })
-    .getRawMany()) as { codigo: string }[];
+    const rows = (await repo
+      .createQueryBuilder('l')
+      .select('l.codigo_lote', 'codigo')
+      .where('l.tenant_id = :tenantId', { tenantId })
+      .andWhere('l.codigo_lote LIKE :p', { p: `${base}%` })
+      .getRawMany()) as { codigo: string }[];
 
-  let max = 0;
-  for (const r of rows) {
-    const m = (r.codigo ?? '').match(/-T(\d+)$/);
-    if (m?.[1]) max = Math.max(max, Number(m[1]));
+    let max = 0;
+    for (const r of rows) {
+      const m = (r.codigo ?? '').match(/-T(\d+)$/);
+      if (m?.[1]) max = Math.max(max, Number(m[1]));
+    }
+    return `${base}${String(max + 1).padStart(4, '0')}`;
   }
-  return `${base}${String(max + 1).padStart(4, '0')}`;
-}
-
 }

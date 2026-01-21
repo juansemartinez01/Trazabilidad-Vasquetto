@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Req } from '@nestjs/common';
+import { Controller, Post, Body, Req , Headers} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CreateUsuarioDto } from '../usuarios/dto/create-usuario.dto';
 import { LoginDto } from './dto/login.dto';
@@ -13,7 +13,14 @@ export class AuthController {
   }
 
   @Post('login')
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto.email, dto.password);
+  login(
+    @Body() dto: { email: string; password: string },
+    @Headers('x-tenant-id') tenantId: string, // o 'x-tenant'
+  ) {
+    if (!tenantId) {
+      // podés tirar BadRequestException si querés
+      throw new Error('Missing x-tenant-id header');
+    }
+    return this.authService.login(dto.email, dto.password, tenantId);
   }
 }

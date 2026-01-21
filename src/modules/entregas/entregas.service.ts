@@ -431,9 +431,10 @@ export class EntregasService {
       .andWhere('u.presentacion_id = :presentacionId', { presentacionId }) // ✅ usa la FK real
       .andWhere('u.deposito_id = :depositoId', { depositoId }) // ✅ usa la FK real
       .andWhere('u.estado = :estado', { estado: 'DISPONIBLE' })
-      .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
-      .addOrderBy('l.fecha_produccion', 'ASC')
-      .addOrderBy('u.created_at', 'ASC')
+      .orderBy('l.fechaVencimiento', 'ASC', 'NULLS LAST')
+      .addOrderBy('l.fechaProduccion', 'ASC')
+      .addOrderBy('u.createdAt', 'ASC')
+
       .take(bultos)
       .getMany();
 
@@ -508,9 +509,10 @@ export class EntregasService {
       .andWhere('p.id = :presentacionId', { presentacionId })
       .andWhere('d.id = :depositoId', { depositoId })
       .andWhere('u.estado = :estado', { estado: 'DISPONIBLE' })
-      .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
-      .addOrderBy('l.fecha_produccion', 'ASC')
-      .addOrderBy('u.created_at', 'ASC')
+      .orderBy('l.fechaVencimiento', 'ASC', 'NULLS LAST')
+      .addOrderBy('l.fechaProduccion', 'ASC')
+      .addOrderBy('u.createdAt', 'ASC')
+
       .take(bultos)
       .getMany();
 

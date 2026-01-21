@@ -197,11 +197,11 @@ export class TransferenciasService {
           if (kg <= 0)
             throw new BadRequestException('cantidadKg requerida para MP');
 
-          const lote = await loteMpRepo.findOne({
+          const lote = await trx.getRepository(LoteMP).findOne({
             where: { tenantId, id: it.loteMp.id },
             lock: { mode: 'pessimistic_write' },
-            relations: ['deposito', 'materiaPrima', 'recepcion'],
           });
+
           if (!lote) throw new NotFoundException('Lote MP no encontrado');
 
           if ((lote.deposito as any)?.id !== origen.id) {

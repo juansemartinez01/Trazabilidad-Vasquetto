@@ -205,28 +205,23 @@ export class TransferenciasService {
           if (!lote) throw new NotFoundException('Lote MP no encontrado');
 
           // ✅ validar depósito por FK (sin joins)
-          const depositoId =
-            (lote as any).depositoId ?? (lote as any).deposito_id;
-          if (depositoId && depositoId !== origen.id) {
+          const dep = await loteMpRepo
+            .createQueryBuilder('l')
+            .select('l.deposito_id', 'deposito_id')
+            .where('l.tenant_id = :tenantId', { tenantId })
+            .andWhere('l.id = :id', { id: it.loteMp.id })
+            .getRawOne<{ deposito_id: string }>();
+
+          if (!dep) {
+            throw new NotFoundException('Lote MP no encontrado');
+          }
+
+          if (dep.deposito_id !== origen.id) {
             throw new BadRequestException(
               `El lote MP ${lote.codigoLote} no pertenece al depósito origen`,
             );
           }
-          // Si no tenés columna depositoId expuesta, validamos usando la relación pero SIN lock:
-          // (esto no rompe porque ya bloqueamos la fila de lote)
-          if (!depositoId) {
-            const dep = await loteMpRepo
-              .createQueryBuilder('l')
-              .select(['l.id', 'l.deposito_id'])
-              .where('l.tenant_id = :tenantId', { tenantId })
-              .andWhere('l.id = :id', { id: lote.id })
-              .getRawOne<{ l_deposito_id: string }>();
-            if (dep?.l_deposito_id !== origen.id) {
-              throw new BadRequestException(
-                `El lote MP ${lote.codigoLote} no pertenece al depósito origen`,
-              );
-            }
-          }
+
 
           const disp = dec(lote.cantidadActualKg);
           if (disp < kg) {

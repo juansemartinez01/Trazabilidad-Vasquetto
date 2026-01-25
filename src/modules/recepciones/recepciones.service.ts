@@ -364,22 +364,34 @@ export class RecepcionesService {
       const movRepo = trx.getRepository(StockMovimiento);
 
       // =========================
-      // 1) LOCK SOLO DE RECEPCION
+      // 1) LOCK RECEPCION (SIN JOINS)
       // =========================
       const recepcion = await recepcionRepo
         .createQueryBuilder('r')
-        .leftJoinAndSelect('r.proveedor', 'p') // inner/left no importa acá (proveedor puede ser null? normalmente no)
+        .select([
+          'r.id',
+          'r.tenantId',
+          'r.numeroRemito',
+          'r.fechaRemito',
+          'r.transportista',
+          'r.documentos',
+        ])
         .where('r.id = :id', { id: recepcionId })
         .andWhere('r.tenant_id = :tenantId', { tenantId })
-        .setLock('pessimistic_write') // ✅ FOR UPDATE sobre "recepciones" (sin outer-join nullable side)
+        .setLock('pessimistic_write') // ✅ FOR UPDATE solo sobre recepciones
         .getOne();
 
       if (!recepcion) throw new NotFoundException('Recepción no encontrada');
 
+      // (opcional) traer proveedor SIN LOCK y SIN PROBLEMAS
+      const recepcionConProveedor = await recepcionRepo.findOne({
+        where: { id: recepcionId, tenantId },
+        relations: ['proveedor'],
+      });
+
       // =========================
       // 2) TRAER + LOCK LOTES
       // =========================
-      // OJO: no uses relations con lock en find() -> lo hacemos por QB.
       const lotes = await loteRepo
         .createQueryBuilder('l')
         .leftJoinAndSelect('l.materiaPrima', 'mp')
@@ -389,24 +401,13 @@ export class RecepcionesService {
         .setLock('pessimistic_write') // ✅ lockea filas de lotes_mp
         .getMany();
 
-      // Si por tu negocio una recepción siempre debe tener lotes, podrías validar:
-      // if (lotes.length === 0) throw new BadRequestException('Recepción sin lotes (inconsistente)');
-
       // =========================
-      // 3) VALIDACIONES DURAS
+      // 3) VALIDACIONES
       // =========================
-      // 3.1) que no haya consumo / ajuste sobre los lotes (actual==inicial)
       const EPS = 0.000001;
       for (const l of lotes) {
         const ini = Number(l.cantidadInicialKg ?? 0);
         const act = Number(l.cantidadActualKg ?? 0);
-
-        if (Number.isNaN(ini) || Number.isNaN(act)) {
-          throw new BadRequestException(
-            `Lote ${l.codigoLote} tiene cantidades inválidas (NaN).`,
-          );
-        }
-
         if (Math.abs(act - ini) > EPS) {
           throw new BadRequestException(
             `No se puede eliminar: el lote ${l.codigoLote} ya fue consumido o modificado (inicial=${ini}, actual=${act}).`,
@@ -414,35 +415,28 @@ export class RecepcionesService {
         }
       }
 
-      // 3.2) que NO existan movimientos distintos a RECEPCION para esos lotes
-      // Esto cubre el caso: alguien registró consumo/merma/ajuste pero por algún bug dejó actual==inicial.
+      // extra: que no existan movimientos NO-RECEPCION en esos lotes
       const loteIds = lotes.map((l) => l.id);
-
       if (loteIds.length > 0) {
         const otrosMov = await movRepo
           .createQueryBuilder('m')
-          .select(['m.id', 'm.tipo', 'm.referenciaId'])
+          .select(['m.id', 'm.tipo'])
           .where('m.tenant_id = :tenantId', { tenantId })
-          .andWhere('m.loteMPId IN (:...loteIds)', { loteIds }) // ✅ gracias a FK, TypeORM expone loteMPId aunque no esté en entity
-          .andWhere('m.tipo <> :tipoRecep', {
-            tipoRecep: TipoMovimiento.RECEPCION,
-          })
-          .limit(5)
+          .andWhere('m.loteMPId IN (:...loteIds)', { loteIds })
+          .andWhere('m.tipo <> :t', { t: TipoMovimiento.RECEPCION })
+          .limit(1)
           .getMany();
 
         if (otrosMov.length > 0) {
-          const ejemplo = otrosMov[0];
           throw new BadRequestException(
-            `No se puede eliminar: existen movimientos posteriores sobre los lotes (ej: ${ejemplo.tipo}).`,
+            `No se puede eliminar: existen movimientos posteriores sobre los lotes (ej: ${otrosMov[0].tipo}).`,
           );
         }
       }
 
       // =========================
-      // 4) BORRAR MOVIMIENTOS RECEPCION
+      // 4) BORRAR MOVS RECEPCION
       // =========================
-      // Por tu StockService: tipo=RECEPCION y referenciaId=recepcionId
-      // (esto además es independiente de los lotes; si un día cambia el modelo, igual los elimina)
       await movRepo.delete({
         tenantId,
         tipo: TipoMovimiento.RECEPCION,
@@ -465,7 +459,7 @@ export class RecepcionesService {
           recepcionId,
           numeroRemito: recepcion.numeroRemito,
           fechaRemito: recepcion.fechaRemito,
-          proveedorId: recepcion.proveedor?.id ?? null,
+          proveedorId: recepcionConProveedor?.proveedor?.id ?? null,
           lotes: lotes.map((l) => ({
             loteId: l.id,
             codigoLote: l.codigoLote,
@@ -476,11 +470,7 @@ export class RecepcionesService {
         },
       );
 
-      return {
-        ok: true,
-        recepcionId,
-        deletedLotes: lotes.length,
-      };
+      return { ok: true, recepcionId, deletedLotes: lotes.length };
     });
   }
 }

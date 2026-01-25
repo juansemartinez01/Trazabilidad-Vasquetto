@@ -437,7 +437,7 @@ export class RecepcionesService {
           .createQueryBuilder('m')
           .select(['m.id', 'm.tipo'])
           .where('m.tenant_id = :tenantId', { tenantId })
-          .andWhere('m.loteMPId IN (:...loteIds)', { loteIds })
+          .andWhere('m.lote_mp_id IN (:...loteIds)', { loteIds })
           .andWhere('m.tipo <> :t', { t: TipoMovimiento.RECEPCION })
           .limit(1)
           .getMany();

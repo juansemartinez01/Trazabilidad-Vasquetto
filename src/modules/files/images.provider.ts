@@ -42,12 +42,13 @@ type CreateUploadResponse = {
   headers?: Record<string, string>;
 };
 
-function extFromMime(mime: string): 'png' | 'jpg' | 'jpeg' {
+function extFromMime(mime: string): 'png' | 'jpeg' | 'pdf' {
   if (mime === 'image/png') return 'png';
   if (mime === 'image/jpeg') return 'jpeg';
-  // fallback
-  return 'jpeg';
+  if (mime === 'application/pdf') return 'pdf';
+  throw new Error(`Unsupported mime: ${mime}`);
 }
+
 
 function buildAuthHeaders(tenantKey: string, apiKey?: string) {
   const h = new Headers();
@@ -112,21 +113,22 @@ export const ImagesProvider: Provider = {
 
         mark('createUpload ok');
 
+        
         mark('PUT S3 start');
 
-        // 2) PUT a S3 (presigned PUT)
-        const putHeaders = new Headers();
-        putHeaders.set(
-          'Content-Type',
-          created.headers?.['Content-Type'] ?? mime,
-        );
+        // 2) PUT a S3 (presigned PUT) - RESPETAR headers del backend
+        const putHeaders: Record<string, string> = {
+          ...(created.headers ?? {}),
+        };
+
+        // aseguramos Content-Type correcto (si el backend lo fija, lo respetamos)
+        putHeaders['Content-Type'] = created.headers?.['Content-Type'] ?? mime;
 
         const putRes = await fetch(created.uploadUrl, {
           method: 'PUT',
-          headers: { 'Content-Type': mime },
-          body: buffer as any, // runtime OK
+          headers: putHeaders,
+          body: buffer as any,
         });
-
 
         if (!putRes.ok) {
           const text = await putRes.text().catch(() => '');
@@ -135,7 +137,6 @@ export const ImagesProvider: Provider = {
 
         mark('PUT S3 ok');
 
-        mark('complete start');
         // 3) complete
         const completeHeaders = new Headers(authHeaders);
         completeHeaders.set('Content-Type', 'application/json');

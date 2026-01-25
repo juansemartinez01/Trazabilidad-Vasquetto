@@ -42,12 +42,24 @@ type CreateUploadResponse = {
   headers?: Record<string, string>;
 };
 
-function extFromMime(mime: string): 'png' | 'jpeg' | 'pdf' {
+type AllowedExt = 'png' | 'jpg' | 'jpeg' | 'pdf';
+
+function extFromMime(mime: string, filename?: string): AllowedExt {
   if (mime === 'image/png') return 'png';
   if (mime === 'image/jpeg') return 'jpeg';
   if (mime === 'application/pdf') return 'pdf';
+
+  // fallback por extensión del nombre (por si algún proxy manda octet-stream)
+  const byName = (filename ?? '').toLowerCase();
+  if (byName.endsWith('.pdf')) return 'pdf';
+  if (byName.endsWith('.png')) return 'png';
+  if (byName.endsWith('.jpg')) return 'jpg';
+  if (byName.endsWith('.jpeg')) return 'jpeg';
+
+  // si querés permitir solo estos tipos, mejor explotar acá:
   throw new Error(`Unsupported mime: ${mime}`);
 }
+
 
 
 function buildAuthHeaders(tenantKey: string, apiKey?: string) {
@@ -87,7 +99,8 @@ export const ImagesProvider: Provider = {
           console.log(`[IMAGES] ${s} +${Date.now() - t0}ms`);
 
 
-        const ext = extFromMime(mime);
+        const ext = extFromMime(mime, filename);
+
         const bytes = buffer.length;
 
 
@@ -117,18 +130,18 @@ export const ImagesProvider: Provider = {
         mark('PUT S3 start');
 
         // 2) PUT a S3 (presigned PUT) - RESPETAR headers del backend
-        const putHeaders: Record<string, string> = {
-          ...(created.headers ?? {}),
-        };
-
-        // aseguramos Content-Type correcto (si el backend lo fija, lo respetamos)
-        putHeaders['Content-Type'] = created.headers?.['Content-Type'] ?? mime;
+        const putHeaders = new Headers(created.headers ?? {});
+        // si no vino header, setealo igual
+        if (!putHeaders.get('Content-Type')) {
+          putHeaders.set('Content-Type', mime);
+        }
 
         const putRes = await fetch(created.uploadUrl, {
           method: 'PUT',
-          headers: putHeaders,
+          headers: putHeaders as any,
           body: buffer as any,
         });
+
 
         if (!putRes.ok) {
           const text = await putRes.text().catch(() => '');

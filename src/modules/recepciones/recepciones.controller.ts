@@ -1,7 +1,8 @@
-import { Controller, Post, Body, Req, Get, UseGuards, Query } from '@nestjs/common';
+import { Controller, Post, Body, Req, Get, UseGuards, Query, Patch, Param } from '@nestjs/common';
 import { RecepcionesService } from './recepciones.service';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { QueryRecepcionesDto } from './dto/query-recepciones.dto';
+import { UpdateRecepcionDto } from './dto/update-recepcion.dto';
 
 @Controller('recepciones')
 export class RecepcionesController {
@@ -17,5 +18,12 @@ export class RecepcionesController {
   @Get()
   listar(@Req() req, @Query() q: QueryRecepcionesDto) {
     return this.service.obtenerTodasConFiltros(req.tenantId, q);
+  }
+
+  // ✅ NUEVO: editar cabecera de recepción (NO toca lotes)
+  @UseGuards(AuthGuard)
+  @Patch(':id')
+  editar(@Param('id') id: string, @Body() dto: UpdateRecepcionDto, @Req() req) {
+    return this.service.editarCabecera(req.tenantId, req.usuario.id, id, dto);
   }
 }

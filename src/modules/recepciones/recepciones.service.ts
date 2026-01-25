@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { Recepcion } from './entities/recepcion.entity';
@@ -7,6 +7,8 @@ import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
 import { Deposito } from '../deposito/entities/deposito.entity';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { QueryRecepcionesDto } from './dto/query-recepciones.dto';
+import { UpdateRecepcionDto } from './dto/update-recepcion.dto';
+import { Proveedor } from '../proveedores/entities/proveedor.entity';
 
 @Injectable()
 export class RecepcionesService {
@@ -15,6 +17,7 @@ export class RecepcionesService {
     @InjectRepository(LoteMP) private loteRepo: Repository<LoteMP>,
     @InjectRepository(MateriaPrima) private mpRepo: Repository<MateriaPrima>,
     @InjectRepository(Deposito) private depRepo: Repository<Deposito>,
+    @InjectRepository(Proveedor) private provRepo: Repository<Proveedor>,
     private auditoria: AuditoriaService,
   ) {}
 
@@ -285,5 +288,64 @@ export class RecepcionesService {
       page,
       limit,
     };
+  }
+
+  async editarCabecera(
+    tenantId: string,
+    usuarioId: string,
+    recepcionId: string,
+    dto: UpdateRecepcionDto,
+  ) {
+    // 1) Traer recepción del tenant
+    const recepcion = await this.recepcionRepo.findOne({
+      where: { id: recepcionId, tenantId },
+      relations: ['proveedor'], // para auditar cambios con datos previos
+    });
+    if (!recepcion) throw new NotFoundException('Recepción no encontrada');
+
+    // 2) Validar proveedor si viene
+    if (dto.proveedorId) {
+      const prov = await this.provRepo.findOne({
+        where: { id: dto.proveedorId, tenantId },
+      });
+      if (!prov) throw new NotFoundException('Proveedor no encontrado');
+      recepcion.proveedor = prov;
+    }
+
+    // 3) Aplicar cambios simples (solo si vienen)
+    if (dto.numeroRemito !== undefined)
+      recepcion.numeroRemito = dto.numeroRemito.trim();
+
+    if (dto.fechaRemito !== undefined) {
+      // date column: guardamos como Date (más limpio)
+      const d = new Date(dto.fechaRemito);
+      if (Number.isNaN(d.getTime())) {
+        throw new BadRequestException('fechaRemito inválida');
+      }
+      recepcion.fechaRemito = d as any;
+    }
+
+    if (dto.transportista !== undefined) {
+      recepcion.transportista = dto.transportista?.trim() || "0";
+    }
+
+    if (dto.documentos !== undefined) {
+      recepcion.documentos = dto.documentos; // jsonb
+    }
+
+    // 4) Guardar
+    await this.recepcionRepo.save(recepcion);
+
+    // 5) Auditoría (ideal: guardar before/after)
+    await this.auditoria.registrar(tenantId, usuarioId, 'RECEPCION_EDITADA', {
+      recepcionId,
+      numeroRemito: recepcion.numeroRemito,
+    });
+
+    // 6) Devolver con relaciones consistentes (sin romper frontend)
+    return this.recepcionRepo.findOne({
+      where: { id: recepcionId, tenantId },
+      relations: ['proveedor', 'lotes', 'lotes.materiaPrima', 'lotes.deposito'],
+    });
   }
 }

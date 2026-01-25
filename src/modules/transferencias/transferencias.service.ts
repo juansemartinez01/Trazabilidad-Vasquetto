@@ -89,6 +89,8 @@ export class TransferenciasService {
     });
     if (!destino) throw new NotFoundException('Depósito destino no encontrado');
 
+    
+
     const t = this.repo.create({
       tenantId,
       fecha: dto.fecha,
@@ -190,39 +192,48 @@ export class TransferenciasService {
       if (t.tipo === TransferenciaTipo.MP) {
         for (const it of t.items) {
           const kg = dec(it.cantidadKg);
-          if (!it.loteMp?.id)
-            throw new BadRequestException('MP requiere loteMpId');
-          if (kg <= 0)
-            throw new BadRequestException('cantidadKg requerida para MP');
 
-          // ✅ LOCK SIN EAGER (evita LEFT JOIN + FOR UPDATE)
+          if (!it.loteMp?.id) {
+            throw new BadRequestException('MP requiere loteMpId');
+          }
+          if (kg <= 0) {
+            throw new BadRequestException('cantidadKg requerida para MP');
+          }
+
+          // 1) Lock del lote para asegurar stock / concurrencia
           const lote = await loteMpRepo.findOne({
             where: { tenantId, id: it.loteMp.id },
             lock: { mode: 'pessimistic_write' },
             loadEagerRelations: false,
           });
-
           if (!lote) throw new NotFoundException('Lote MP no encontrado');
 
-          // ✅ validar depósito por FK (sin joins)
-          const dep = await loteMpRepo
+          // 2) Traer FKs necesarios (recepcion_id, materia_prima_id, deposito_id) SIN relations
+          const raw = await loteMpRepo
             .createQueryBuilder('l')
-            .select('l.deposito_id', 'deposito_id')
+            .select([
+              'l.deposito_id AS deposito_id',
+              'l.recepcion_id AS recepcion_id',
+              'l.materia_prima_id AS materia_prima_id',
+            ])
             .where('l.tenant_id = :tenantId', { tenantId })
             .andWhere('l.id = :id', { id: it.loteMp.id })
-            .getRawOne<{ deposito_id: string }>();
+            .getRawOne<{
+              deposito_id: string;
+              recepcion_id: string;
+              materia_prima_id: string;
+            }>();
 
-          if (!dep) {
-            throw new NotFoundException('Lote MP no encontrado');
-          }
+          if (!raw) throw new NotFoundException('Lote MP no encontrado');
 
-          if (dep.deposito_id !== origen.id) {
+          // 3) Validar depósito origen por FK real
+          if (raw.deposito_id !== origen.id) {
             throw new BadRequestException(
               `El lote MP ${lote.codigoLote} no pertenece al depósito origen`,
             );
           }
 
-
+          // 4) Validar stock
           const disp = dec(lote.cantidadActualKg);
           if (disp < kg) {
             throw new BadRequestException(
@@ -230,11 +241,11 @@ export class TransferenciasService {
             );
           }
 
-          // 1) descontar origen
+          // 5) Descontar origen
           lote.cantidadActualKg = disp - kg;
           await loteMpRepo.save(lote);
 
-          // 2) crear lote destino (split)
+          // 6) Crear lote destino (split) seteando IDs (evita null en recepcion_id/materia_prima_id)
           const codigoHijo = await this.generarCodigoSplitMP(
             trx,
             tenantId,
@@ -243,12 +254,12 @@ export class TransferenciasService {
 
           const nuevo = loteMpRepo.create({
             tenantId,
-            recepcion: (lote as any).recepcion, // NOT NULL
-            materiaPrima: (lote as any).materiaPrima,
-            deposito: destino,
+            recepcion: { id: raw.recepcion_id } as any,
+            materiaPrima: { id: raw.materia_prima_id } as any,
+            deposito: { id: destino.id } as any,
             codigoLote: codigoHijo,
             fechaElaboracion: lote.fechaElaboracion,
-            fechaAnalisis: lote.fechaAnalisis,
+            fechaAnalisis: lote.fechaAnalisis ?? null,
             fechaVencimiento: lote.fechaVencimiento,
             cantidadInicialKg: kg,
             cantidadActualKg: kg,
@@ -258,7 +269,7 @@ export class TransferenciasService {
 
           const loteDestino = await loteMpRepo.save(nuevo);
 
-          // 3) movimientos (salida + entrada)
+          // 7) Movimientos (salida + entrada)
           await movRepo.save(
             movRepo.create({
               tenantId,
@@ -267,7 +278,6 @@ export class TransferenciasService {
               deposito: { id: origen.id } as any,
               cantidadKg: -kg,
               referenciaId: t.id,
-              
             }),
           );
 
@@ -279,7 +289,6 @@ export class TransferenciasService {
               deposito: { id: destino.id } as any,
               cantidadKg: +kg,
               referenciaId: t.id,
-              
             }),
           );
 
@@ -368,7 +377,6 @@ export class TransferenciasService {
               deposito: { id: origen.id } as any,
               cantidadKg: -kg,
               referenciaId: t.id,
-              
             }),
           );
           await movRepo.save(
@@ -379,7 +387,6 @@ export class TransferenciasService {
               deposito: { id: destino.id } as any,
               cantidadKg: +kg,
               referenciaId: t.id,
-              
             }),
           );
 
@@ -535,7 +542,6 @@ export class TransferenciasService {
                 cantidadKg: -kg,
                 cantidadUnidades: unidadesCant,
                 referenciaId: t.id,
-                
               }),
             );
 
@@ -549,7 +555,6 @@ export class TransferenciasService {
                 cantidadKg: +kg,
                 cantidadUnidades: unidadesCant,
                 referenciaId: t.id,
-                
               }),
             );
           }

@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, SelectQueryBuilder } from 'typeorm';
+import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
 import { Recepcion } from './entities/recepcion.entity';
 import { LoteMP } from '../lotes/entities/lote-mp.entity';
 import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
@@ -9,10 +9,12 @@ import { AuditoriaService } from '../auditoria/auditoria.service';
 import { QueryRecepcionesDto } from './dto/query-recepciones.dto';
 import { UpdateRecepcionDto } from './dto/update-recepcion.dto';
 import { Proveedor } from '../proveedores/entities/proveedor.entity';
+import { StockMovimiento, TipoMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
 
 @Injectable()
 export class RecepcionesService {
   constructor(
+    private readonly ds: DataSource,
     @InjectRepository(Recepcion) private recepcionRepo: Repository<Recepcion>,
     @InjectRepository(LoteMP) private loteRepo: Repository<LoteMP>,
     @InjectRepository(MateriaPrima) private mpRepo: Repository<MateriaPrima>,
@@ -326,7 +328,7 @@ export class RecepcionesService {
     }
 
     if (dto.transportista !== undefined) {
-      recepcion.transportista = dto.transportista?.trim() || "0";
+      recepcion.transportista = dto.transportista?.trim() || '0';
     }
 
     if (dto.documentos !== undefined) {
@@ -346,6 +348,98 @@ export class RecepcionesService {
     return this.recepcionRepo.findOne({
       where: { id: recepcionId, tenantId },
       relations: ['proveedor', 'lotes', 'lotes.materiaPrima', 'lotes.deposito'],
+    });
+  }
+
+  /**
+   * Elimina una recepción "como si nunca existió":
+   * - Solo si ningún lote fue consumido (actual == inicial)
+   * - Borra movimientos de stock vinculados a la recepción (Tipo RECEPCION + referenciaId)
+   * - Borra la recepción (CASCADE borra lotes)
+   */
+  async eliminar(tenantId: string, usuarioId: string, recepcionId: string) {
+    return this.ds.transaction(async (trx) => {
+      const recepcionRepo = trx.getRepository(Recepcion);
+      const loteRepo = trx.getRepository(LoteMP);
+      const movRepo = trx.getRepository(StockMovimiento);
+
+      // 1) Traer recepción + lotes con lock (evita carreras)
+      const recepcion = await recepcionRepo.findOne({
+        where: { id: recepcionId, tenantId },
+        relations: [
+          'proveedor',
+          'lotes',
+          'lotes.materiaPrima',
+          'lotes.deposito',
+        ],
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!recepcion) throw new NotFoundException('Recepción no encontrada');
+
+      const lotes = recepcion.lotes ?? [];
+
+      // 2) Validación: que no se haya consumido nada de esos lotes
+      for (const l of lotes) {
+        const ini = Number(l.cantidadInicialKg ?? 0);
+        const act = Number(l.cantidadActualKg ?? 0);
+
+        // tolerancia para decimales (por si hay 100.0000 vs 100)
+        const eps = 0.000001;
+        if (Math.abs(act - ini) > eps) {
+          throw new BadRequestException(
+            `No se puede eliminar: el lote ${l.codigoLote} ya fue consumido o modificado (inicial=${ini}, actual=${act}).`,
+          );
+        }
+      }
+
+      // 3) Lock de movimientos vinculados (opcional pero recomendado)
+      //    Si alguien justo consume mientras borrás, con la transacción y locks minimizás riesgo.
+      await movRepo
+        .createQueryBuilder('m')
+        .setLock('pessimistic_write')
+        .where('m.tenant_id = :tenantId', { tenantId })
+        .andWhere('m.referencia_id = :ref', { ref: recepcionId })
+        .getMany();
+
+      // 4) Borrar movimientos de stock de la recepción
+      //    En tu StockService, para ingreso recepción usás TipoMovimiento.RECEPCION y referenciaId = recepcionId (ideal).
+      //    Si también guardás referenciaId como string, ok.
+      await movRepo.delete({
+        tenantId,
+        tipo: TipoMovimiento.RECEPCION as any,
+        referenciaId: recepcionId,
+      } as any);
+
+      // 5) Borrar recepción (CASCADE borra lotes_mp)
+      await recepcionRepo.delete({ id: recepcionId, tenantId });
+
+      // 6) Auditoría
+      await this.auditoria.registrar(
+        tenantId,
+        usuarioId,
+        'RECEPCION_ELIMINADA',
+        {
+          recepcionId,
+          numeroRemito: recepcion.numeroRemito,
+          fechaRemito: recepcion.fechaRemito,
+          proveedorId: recepcion.proveedor?.id,
+          lotes: lotes.map((l) => ({
+            loteId: l.id,
+            codigoLote: l.codigoLote,
+            materiaPrimaId: l.materiaPrima?.id,
+            depositoId: l.deposito?.id,
+            cantidadKg: Number(l.cantidadInicialKg ?? 0),
+          })),
+        },
+      );
+
+      return {
+        ok: true,
+        recepcionId,
+        deletedLotes: lotes.length,
+        deletedMovimientos: true,
+      };
     });
   }
 }

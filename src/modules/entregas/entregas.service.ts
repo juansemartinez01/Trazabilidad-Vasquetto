@@ -286,11 +286,7 @@ export class EntregasService {
           if (!lote) throw new NotFoundException('Lote origen no encontrado');
 
           // validación estado/vencimiento (misma que granel)
-          await this.validarLoteNoVencido(
-            trx,
-            tenantId,
-            lote
-          );
+          await this.validarLoteNoVencido(trx, tenantId, lote);
 
           const cant = units.length;
           const kg = cant * peso;
@@ -328,7 +324,27 @@ export class EntregasService {
         entregaId: entrega.id,
       });
 
-      return this.obtener(tenantId, entrega.id);
+      // ✅ Traer entrega completa (dentro de la TX para consistencia)
+      const entregaFull = await entregaRepo.findOne({
+        where: { id: entrega.id, tenantId },
+        relations: [
+          'cliente',
+          'items',
+          'items.lote',
+          'items.deposito',
+          'items.presentacion',
+        ],
+      });
+
+      if (!entregaFull) throw new NotFoundException('Entrega no encontrada');
+
+      const consumo = this.buildConsumoResponse(entregaFull);
+
+      // ✅ Respuesta enriquecida (no rompe: seguís devolviendo entrega completa)
+      return {
+        entrega: entregaFull,
+        consumo,
+      };
     });
   }
 
@@ -550,5 +566,62 @@ export class EntregasService {
         );
       }
     }
+  }
+
+  private buildConsumoResponse(entrega: Entrega) {
+    const embolsadoMap = new Map<
+      string,
+      {
+        loteId: string;
+        codigoLote: string;
+        presentacionId: string;
+        presentacionCodigo: string;
+        bolsas: number;
+        kg: number;
+      }
+    >();
+
+    const granelMap = new Map<
+      string,
+      { loteId: string; codigoLote: string; kg: number }
+    >();
+
+    for (const it of entrega.items ?? []) {
+      const loteId = (it.lote as any)?.id;
+      const codigoLote = (it.lote as any)?.codigoLote ?? '';
+
+      const pres = it.presentacion as any;
+      const esEmbolsado = !!pres && pres.unidadVenta !== 'KG'; // UnidadVenta.KG si lo tenés importado acá
+
+      const kg = Number(it.cantidadKg ?? 0);
+      const bultos = Number(it.cantidadBultos ?? 0);
+
+      if (esEmbolsado) {
+        const key = `${loteId}|${pres.id}`;
+        const cur = embolsadoMap.get(key) ?? {
+          loteId,
+          codigoLote,
+          presentacionId: pres.id,
+          presentacionCodigo: pres.codigo ?? '',
+          bolsas: 0,
+          kg: 0,
+        };
+
+        cur.bolsas += bultos;
+        cur.kg += kg;
+        embolsadoMap.set(key, cur);
+      } else {
+        // granel o pres KG
+        const key = `${loteId}`;
+        const cur = granelMap.get(key) ?? { loteId, codigoLote, kg: 0 };
+        cur.kg += kg;
+        granelMap.set(key, cur);
+      }
+    }
+
+    return {
+      granel: Array.from(granelMap.values()),
+      embolsado: Array.from(embolsadoMap.values()),
+    };
   }
 }

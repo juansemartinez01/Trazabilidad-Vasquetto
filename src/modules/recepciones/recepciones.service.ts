@@ -390,16 +390,31 @@ export class RecepcionesService {
       });
 
       // =========================
-      // 2) TRAER + LOCK LOTES
+      // 2) LOCK LOTES (SIN JOINS)
       // =========================
-      const lotes = await loteRepo
+      const lotesBase = await loteRepo
         .createQueryBuilder('l')
-        .leftJoinAndSelect('l.materiaPrima', 'mp')
-        .leftJoinAndSelect('l.deposito', 'd')
+        .select([
+          'l.id',
+          'l.codigoLote',
+          'l.cantidadInicialKg',
+          'l.cantidadActualKg',
+          'l.materiaPrima',
+          'l.deposito',
+        ])
         .where('l.tenant_id = :tenantId', { tenantId })
         .andWhere('l.recepcion_id = :rid', { rid: recepcionId })
-        .setLock('pessimistic_write') // ✅ lockea filas de lotes_mp
+        .setLock('pessimistic_write') // ✅ FOR UPDATE sobre lotes_mp solamente
         .getMany();
+
+      // Ahora sí: cargar relaciones SIN LOCK (no hay FOR UPDATE)
+      const lotes = await loteRepo.find({
+        where: {
+          tenantId,
+          recepcion: { id: recepcionId } as any,
+        } as any,
+        relations: ['materiaPrima', 'deposito'],
+      });
 
       // =========================
       // 3) VALIDACIONES

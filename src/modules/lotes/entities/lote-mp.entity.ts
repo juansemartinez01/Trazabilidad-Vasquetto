@@ -13,10 +13,12 @@ export class LoteMP extends TenantBaseEntity {
   @JoinColumn({ name: 'recepcion_id' })
   recepcion: Recepcion;
 
-  @ManyToOne(() => MateriaPrima, { eager: true })
+  @ManyToOne(() => MateriaPrima, { eager: true, nullable: false })
+  @JoinColumn({ name: 'materia_prima_id' })
   materiaPrima: MateriaPrima;
 
-  @ManyToOne(() => Deposito, { eager: true })
+  @ManyToOne(() => Deposito, { eager: true, nullable: false })
+  @JoinColumn({ name: 'deposito_id' })
   deposito: Deposito;
 
   @Column()

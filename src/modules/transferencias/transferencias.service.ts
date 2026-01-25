@@ -300,102 +300,148 @@ export class TransferenciasService {
       }
 
       // =====================
-      // PF granel (split de lote)
-      // =====================
-      if (t.tipo === TransferenciaTipo.PF_GRANEL) {
-        for (const it of t.items) {
-          const kg = dec(it.cantidadKg);
-          if (!it.lotePf?.id)
-            throw new BadRequestException('PF_GRANEL requiere lotePfId');
-          if (kg <= 0)
-            throw new BadRequestException(
-              'cantidadKg requerida para PF_GRANEL',
-            );
+// PF granel (split de lote)
+// =====================
+if (t.tipo === TransferenciaTipo.PF_GRANEL) {
+  for (const it of t.items) {
+    const kg = dec(it.cantidadKg);
 
-          // ✅ LOCK SIN EAGER/RELATIONS
-          const lote = await lotePfRepo.findOne({
-            where: { tenantId, id: it.lotePf.id },
-            lock: { mode: 'pessimistic_write' },
-            loadEagerRelations: false,
-          });
-          if (!lote) throw new NotFoundException('Lote PF no encontrado');
+    if (!it.lotePf?.id) {
+      throw new BadRequestException('PF_GRANEL requiere lotePfId');
+    }
+    if (kg <= 0) {
+      throw new BadRequestException('cantidadKg requerida para PF_GRANEL');
+    }
 
-          const depositoId =
-            (lote as any).depositoId ?? (lote as any).deposito_id;
-          if (depositoId && depositoId !== origen.id) {
-            throw new BadRequestException(
-              `El lote PF ${lote.codigoLote} no pertenece al depósito origen`,
-            );
-          }
+    // 1) LOCK del lote para concurrencia (SIN eager/relations)
+    const lote = await lotePfRepo.findOne({
+      where: { tenantId, id: it.lotePf.id },
+      lock: { mode: 'pessimistic_write' },
+      loadEagerRelations: false,
+    });
+    if (!lote) throw new NotFoundException('Lote PF no encontrado');
 
-          if (
-            (lote as any).estado &&
-            (lote as any).estado !== LotePfEstado.LISTO
-          ) {
-            throw new BadRequestException(
-              `El lote ${lote.codigoLote} no está LISTO (estado: ${(lote as any).estado})`,
-            );
-          }
+    // 2) Traer FKs y datos necesarios por RAW (sin depender de eager/relations)
+    const raw = await lotePfRepo
+      .createQueryBuilder('l')
+      .select([
+        'l.id AS id',
+        'l.codigo_lote AS codigo_lote',
+        'l.deposito_id AS deposito_id',
+        'l.producto_final_id AS producto_final_id',
+        'l.fecha_produccion AS fecha_produccion',
+        'l.fecha_vencimiento AS fecha_vencimiento',
+        'l.estado AS estado',
+      ])
+      .where('l.tenant_id = :tenantId', { tenantId })
+      .andWhere('l.id = :id', { id: it.lotePf.id })
+      .getRawOne<{
+        id: string;
+        codigo_lote: string;
+        deposito_id: string;
+        producto_final_id: string;
+        fecha_produccion: Date | string;
+        fecha_vencimiento: Date | string | null;
+        estado: LotePfEstado | string | null;
+      }>();
 
-          const disp = dec(lote.cantidadActualKg);
-          if (disp < kg)
-            throw new BadRequestException(
-              `Stock insuficiente en lote PF (disp ${disp}, req ${kg})`,
-            );
+    if (!raw) throw new NotFoundException('Lote PF no encontrado');
 
-          // descuenta origen
-          lote.cantidadActualKg = disp - kg;
-          await lotePfRepo.save(lote);
+    // 3) Validar depósito origen por FK real
+    if (raw.deposito_id !== origen.id) {
+      throw new BadRequestException(
+        `El lote PF ${raw.codigo_lote} no pertenece al depósito origen`,
+      );
+    }
 
-          // crea lote destino “hijo”
-          const nuevo = lotePfRepo.create({
-            tenantId,
-            codigoLote: await this.generarCodigoSplit(
-              trx,
-              tenantId,
-              lote.codigoLote,
-              'PF',
-            ),
-            cantidadInicialKg: kg,
-            cantidadActualKg: kg,
-            deposito: destino,
-            fechaProduccion: (lote as any).fechaProduccion,
-            fechaVencimiento: (lote as any).fechaVencimiento,
-            estado: LotePfEstado.LISTO,
-            motivoEstado: `Split desde ${lote.codigoLote} por transferencia ${t.id}`,
-            fechaEstado: new Date(),
-            productoFinal: { id: (lote as any).productoFinalId } as any,
-          });
+    // 4) Validar estado (LISTO)
+    if (raw.estado && raw.estado !== LotePfEstado.LISTO) {
+      throw new BadRequestException(
+        `El lote ${raw.codigo_lote} no está LISTO (estado: ${raw.estado})`,
+      );
+    }
 
-          const loteDestino = await lotePfRepo.save(nuevo);
+    // 5) Validar que exista producto_final_id (NOT NULL en DB)
+    if (!raw.producto_final_id) {
+      throw new BadRequestException(
+        `El lote PF ${raw.codigo_lote} no tiene producto_final_id (datos inconsistentes)`,
+      );
+    }
 
-          await movRepo.save(
-            movRepo.create({
-              tenantId,
-              tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
-              lotePF: { id: lote.id } as any,
-              deposito: { id: origen.id } as any,
-              cantidadKg: -kg,
-              referenciaId: t.id,
-            }),
-          );
-          await movRepo.save(
-            movRepo.create({
-              tenantId,
-              tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
-              lotePF: { id: loteDestino.id } as any,
-              deposito: { id: destino.id } as any,
-              cantidadKg: +kg,
-              referenciaId: t.id,
-            }),
-          );
+    // 6) Validar stock disponible
+    const disp = dec(lote.cantidadActualKg);
+    if (disp < kg) {
+      throw new BadRequestException(
+        `Stock insuficiente en lote PF (disp ${disp}, req ${kg})`,
+      );
+    }
 
-          it.cantidadKg = kg;
-          await itemRepo.save(it);
-        }
-      }
+    // 7) Descontar origen
+    lote.cantidadActualKg = disp - kg;
+    await lotePfRepo.save(lote);
 
-      // =====================
+    // 8) Crear lote destino “hijo” (split) seteando IDs reales
+    const codigoHijo = await this.generarCodigoSplit(
+      trx,
+      tenantId,
+      raw.codigo_lote,
+      'PF',
+    );
+
+    const nuevo = lotePfRepo.create({
+      tenantId,
+      codigoLote: codigoHijo,
+      cantidadInicialKg: kg,
+      cantidadActualKg: kg,
+
+      // ✅ seteo por id para evitar depender de eager dentro del trx
+      deposito: { id: destino.id } as any,
+
+      // ✅ usar fechas reales del lote padre
+      fechaProduccion: raw.fecha_produccion as any,
+      fechaVencimiento: (raw.fecha_vencimiento ?? null) as any,
+
+      estado: LotePfEstado.LISTO,
+      motivoEstado: `Split desde ${raw.codigo_lote} por transferencia ${t.id}`,
+      fechaEstado: new Date(),
+
+      // ✅ CLAVE: productoFinal SIEMPRE con id real
+      productoFinal: { id: raw.producto_final_id } as any,
+    });
+
+    const loteDestino = await lotePfRepo.save(nuevo);
+
+    // 9) Movimientos (salida + entrada)
+    await movRepo.save(
+      movRepo.create({
+        tenantId,
+        tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
+        lotePF: { id: lote.id } as any,
+        deposito: { id: origen.id } as any,
+        cantidadKg: -kg,
+        referenciaId: t.id,
+      }),
+    );
+
+    await movRepo.save(
+      movRepo.create({
+        tenantId,
+        tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
+        lotePF: { id: loteDestino.id } as any,
+        deposito: { id: destino.id } as any,
+        cantidadKg: +kg,
+        referenciaId: t.id,
+      }),
+    );
+
+    // 10) Persistir item
+    it.cantidadKg = kg;
+    it.descripcion =
+      it.descripcion ?? `Split: ${raw.codigo_lote} -> ${codigoHijo}`;
+    await itemRepo.save(it);
+  }
+}
+      //======================
       // PF envasado (move unidades)
       // =====================
       if (t.tipo === TransferenciaTipo.PF_ENVASADO) {

@@ -169,10 +169,16 @@ export const ImagesProvider: Provider = {
 
         mark('urls ok');
         
+        
+        const isPdf = mime === 'application/pdf';
+
         return {
-          url: urls.variants?.w800 ?? urls.originalUrl,
-          public_id: created.assetId, // 👈 estable, como cloudinary public_id
+          url: isPdf
+            ? urls.originalUrl
+            : (urls.variants?.w800 ?? urls.originalUrl),
+          public_id: created.assetId,
         };
+
       },
 
       async delete(publicId) {

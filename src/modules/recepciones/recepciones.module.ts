@@ -8,10 +8,11 @@ import { RecepcionesService } from './recepciones.service';
 import { RecepcionesController } from './recepciones.controller';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { AuditoriaModule } from '../auditoria/auditoria.module';
+import { Proveedor } from '../proveedores/entities/proveedor.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Recepcion, LoteMP, MateriaPrima, Deposito]),
+    TypeOrmModule.forFeature([Recepcion, LoteMP, MateriaPrima, Deposito,Proveedor]),
     AuditoriaModule,
   ],
   providers: [RecepcionesService],

@@ -761,6 +761,8 @@ async unidadesEnvasadasAgrupadas(tenantId: string, q: QueryUnidadesEnvasadasDto)
       'u.pesoKg',
       'u.createdAt',
 
+      'l.fechaVencimiento', 
+      'l.fechaProduccion',
       'l.id',
       'p.id',
       'd.id',
@@ -827,6 +829,11 @@ async unidadesEnvasadasAgrupadas(tenantId: string, q: QueryUnidadesEnvasadasDto)
       estado: u.estado,
       pesoKg: u.pesoKg,
       createdAt: (u as any).createdAt,
+
+      // ✅ NUEVO: vence igual que el lote origen
+      fechaVencimiento: (u.loteOrigen as any)?.fechaVencimiento ?? null,
+      // opcional:
+      fechaProduccion: (u.loteOrigen as any)?.fechaProduccion ?? null,
     });
   }
 

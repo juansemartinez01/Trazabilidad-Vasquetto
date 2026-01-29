@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import { AuthGuard } from '../auth/guards/auth.guard';
 import { UsuariosService } from './usuarios.service';
 import { CreateUsuarioDto } from './dto/create-usuario.dto';
 import { UpdateUsuarioDto } from './dto/update-usuario.dto';
+import { QueryUsuariosDto } from './dto/query-usuarios.dto';
 
 @Controller('usuarios')
 @UseGuards(AuthGuard)
@@ -26,8 +28,8 @@ export class UsuariosController {
   }
 
   @Get()
-  listar(@Req() req) {
-    return this.service.listar(req.tenantId);
+  listar(@Req() req, @Query() q: QueryUsuariosDto) {
+    return this.service.listar(req.tenantId, q);
   }
 
   @Get(':id')

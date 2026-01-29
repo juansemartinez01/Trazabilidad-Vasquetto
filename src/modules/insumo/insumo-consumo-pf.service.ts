@@ -37,13 +37,9 @@ export class InsumoConsumoPfService {
     });
     if (!insumo) throw new NotFoundException('Insumo no encontrado');
 
-    const esEnvase = Boolean((insumo as any).esEnvase);
-
-
     let productoFinalId: string | null = dto.productoFinalId ?? null;
     let presentacionId: string | null = dto.presentacionId ?? null;
 
-    // Validar PF / Presentación si vienen
     if (productoFinalId) {
       const pf = await this.pfRepo.findOne({
         where: { id: productoFinalId, tenantId },
@@ -57,9 +53,27 @@ export class InsumoConsumoPfService {
         relations: ['productoFinal'],
       });
       if (!pres) throw new NotFoundException('Presentación no encontrada');
-
-      // Si no te mandan productoFinalId, lo inferimos (opcional pero útil)
       if (!productoFinalId) productoFinalId = pres.productoFinal?.id ?? null;
+    }
+
+    const quiereSerEnvase = Boolean(dto.esEnvase);
+
+    // ✅ si va a ser envase por presentación => validar 1 envase por presentacion
+    if (presentacionId && quiereSerEnvase) {
+      const existente = await this.repo.findOne({
+        where: { tenantId, presentacionId, activo: true, esEnvase: true },
+      });
+      if (existente) {
+        throw new BadRequestException(
+          `La presentación ya tiene un envase asociado (regla ${existente.id}).`,
+        );
+      }
+    }
+
+    // ✅ si es envase => marcar también al insumo
+    if (quiereSerEnvase && !(insumo as any).esEnvase) {
+      (insumo as any).esEnvase = true;
+      await this.insumoRepo.save(insumo);
     }
 
     const row = this.repo.create({
@@ -70,30 +84,12 @@ export class InsumoConsumoPfService {
       cantidadPorUnidad: dto.cantidadPorUnidad ?? null,
       cantidadPorKg: dto.cantidadPorKg ?? null,
       activo: dto.activo ?? true,
-      esEnvase,
+      esEnvase: quiereSerEnvase,
     });
-
-    if (presentacionId && esEnvase) {
-      const existente = await this.repo.findOne({
-        where: {
-          tenantId,
-          presentacionId,
-          activo: true,
-          esEnvase: true,
-        },
-      });
-
-      if (existente) {
-        throw new BadRequestException(
-          `La presentación ya tiene un envase asociado (regla ${existente.id}).`,
-        );
-      }
-    }
 
     try {
       return await this.repo.save(row);
     } catch (e: any) {
-      // típicos: violación unique parcial
       throw new BadRequestException(
         `No se pudo crear regla (posible duplicado): ${e?.message ?? e}`,
       );
@@ -161,7 +157,6 @@ export class InsumoConsumoPfService {
       }
     }
 
-
     let nextInsumo = actual.insumo; // por si ya viene eager
     let nextInsumoId = actual.insumoId;
 
@@ -179,7 +174,6 @@ export class InsumoConsumoPfService {
     // recalcular flag
     const nextEsEnvase = Boolean((nextInsumo as any)?.esEnvase);
     actual.esEnvase = nextEsEnvase;
-
 
     if (nextProductoFinalId) {
       const pf = await this.pfRepo.findOne({
@@ -270,7 +264,6 @@ export class InsumoConsumoPfService {
         }),
       )
       .getMany();
-
 
     // Prioridad: si hay presentacion, pisa por insumoId
     const map = new Map<string, InsumoConsumoPF>();

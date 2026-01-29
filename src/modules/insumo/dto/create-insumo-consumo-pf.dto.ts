@@ -38,4 +38,8 @@ export class CreateInsumoConsumoPfDto {
   @IsOptional()
   @IsBoolean()
   activo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  esEnvase?: boolean;
 }

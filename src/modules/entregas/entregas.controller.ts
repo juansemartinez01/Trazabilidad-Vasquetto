@@ -1,4 +1,5 @@
 import { AuthGuard } from "../auth/guards/auth.guard";
+import { QueryEntregasDto } from "./dto/query-entregas.dto";
 import { EntregasService } from "./entregas.service";
 import {
   Controller,
@@ -10,6 +11,7 @@ import {
   Put,
   Delete,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 
 
@@ -24,8 +26,8 @@ export class EntregasController {
   }
 
   @Get()
-  listar(@Req() req) {
-    return this.service.listar(req.tenantId);
+  listar(@Req() req, @Query() q: QueryEntregasDto) {
+    return this.service.listar(req.tenantId, q);
   }
 
   @Get(':id')

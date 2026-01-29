@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, Brackets } from 'typeorm';
 import { Entrega } from './entities/entrega.entity';
 import { EntregaItem } from './entities/entrega-item.entity';
 import { Cliente } from '../clientes/entities/cliente.entity';
@@ -27,6 +27,7 @@ import {
 // ✅ NUEVO
 import { StockPresentacion } from '../empaques/entities/stock-presentacion.entity';
 import { PFUnidadEnvasada } from '../empaques/entities/pf-unidad-envasada.entity';
+import { QueryEntregasDto } from './dto/query-entregas.dto';
 
 function dec(n: any) {
   const v = Number(n);
@@ -399,13 +400,112 @@ export class EntregasService {
   }
 
   /** ============================
-   *  LISTAR ENTREGAS
+   *  LISTAR ENTREGAS (FILTROS + PAGINADO + ORDEN)
    ============================ */
-  listar(tenantId: string) {
-    return this.entregaRepo.find({
-      where: { tenantId },
-      relations: ['cliente'],
-    });
+  async listar(tenantId: string, q: QueryEntregasDto) {
+    const page = Number(q.page ?? 1);
+    const limit = Math.min(Number(q.limit ?? 20), 100);
+    const all = String(q.all ?? 'false') === 'true';
+
+    const qb = this.entregaRepo
+      .createQueryBuilder('e')
+      .where('e.tenant_id = :tenantId', { tenantId })
+      // joins para filtrar/ordenar por cliente/chofer sin depender de eager-load
+      .leftJoin('e.cliente', 'c')
+      .leftJoin('e.chofer', 'ch');
+
+    // ============================
+    // Filtros
+    // ============================
+    if (q.clienteId) {
+      qb.andWhere('c.id = :clienteId', { clienteId: q.clienteId });
+    }
+
+    if (q.choferId) {
+      qb.andWhere('ch.id = :choferId', { choferId: q.choferId });
+    }
+
+    if (q.desde) {
+      // e.fecha es DATE => comparar directo sirve
+      qb.andWhere('e.fecha >= :desde', { desde: q.desde });
+    }
+
+    if (q.hasta) {
+      qb.andWhere('e.fecha <= :hasta', { hasta: q.hasta });
+    }
+
+    if (q.q && q.q.trim()) {
+      const term = `%${q.q.trim()}%`;
+
+      qb.andWhere(
+        new Brackets((b) => {
+          b.where('e.numeroRemito ILIKE :term', { term }).orWhere(
+            'e.observaciones ILIKE :term',
+            { term },
+          );
+
+          // ✅ Opcional: si tu Cliente tiene campos tipo nombre/razonSocial
+          // Ajustá estos nombres según tu entidad real de Cliente:
+          b.orWhere('c.nombre ILIKE :term', { term }).orWhere(
+            'c.razonSocial ILIKE :term',
+            { term },
+          );
+        }),
+      );
+    }
+
+    // ============================
+    // Ordenamiento (whitelist)
+    // ============================
+    const sortDir = q.sortDir === 'ASC' ? 'ASC' : 'DESC';
+
+    const sortMap: Record<string, string> = {
+      fecha: 'e.fecha',
+      createdAt: 'e.createdAt',
+      numeroRemito: 'e.numeroRemito',
+      // Ajustá el campo real del cliente/chofer si no es nombre
+      cliente: 'c.nombre',
+      chofer: 'ch.nombre',
+    };
+
+    const sortCol = sortMap[q.sortBy ?? 'createdAt'] ?? 'e.createdAt';
+
+    qb.orderBy(sortCol, sortDir as any)
+      // desempate estable (muy importante en paginado)
+      .addOrderBy('e.id', 'DESC');
+
+    // ============================
+    // Select + relations (cargar entidades completas)
+    // ============================
+    // Si querés performance máxima, podés proyectar campos.
+    // Por ahora devolvemos entidad completa (como tu respuesta actual).
+    qb.leftJoinAndSelect('e.cliente', 'cliente').leftJoinAndSelect(
+      'e.chofer',
+      'chofer',
+    );
+
+    // ============================
+    // Paginado
+    // ============================
+    if (!all) {
+      qb.skip((page - 1) * limit).take(limit);
+    }
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      meta: all
+        ? { total, all: true }
+        : {
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            sortBy: q.sortBy ?? 'createdAt',
+            sortDir,
+          },
+    };
   }
 
   /** ============================

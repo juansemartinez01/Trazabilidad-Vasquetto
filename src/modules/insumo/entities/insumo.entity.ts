@@ -14,4 +14,7 @@ export class Insumo extends TenantBaseEntity {
 
   @Column('decimal', { nullable: true })
   stockMinimo: number;
+
+  @Column({ name: 'es_envase', type: 'boolean', default: false })
+  esEnvase: boolean;
 }

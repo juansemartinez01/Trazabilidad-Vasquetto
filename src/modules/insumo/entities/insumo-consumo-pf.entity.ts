@@ -53,4 +53,7 @@ export class InsumoConsumoPF extends TenantBaseEntity {
 
   @Column({ default: true })
   activo: boolean;
+
+  @Column({ name: 'es_envase', type: 'boolean', default: false })
+  esEnvase: boolean;
 }

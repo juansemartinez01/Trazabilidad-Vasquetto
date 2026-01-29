@@ -37,6 +37,9 @@ export class InsumoConsumoPfService {
     });
     if (!insumo) throw new NotFoundException('Insumo no encontrado');
 
+    const esEnvase = Boolean((insumo as any).esEnvase);
+
+
     let productoFinalId: string | null = dto.productoFinalId ?? null;
     let presentacionId: string | null = dto.presentacionId ?? null;
 
@@ -67,7 +70,25 @@ export class InsumoConsumoPfService {
       cantidadPorUnidad: dto.cantidadPorUnidad ?? null,
       cantidadPorKg: dto.cantidadPorKg ?? null,
       activo: dto.activo ?? true,
+      esEnvase,
     });
+
+    if (presentacionId && esEnvase) {
+      const existente = await this.repo.findOne({
+        where: {
+          tenantId,
+          presentacionId,
+          activo: true,
+          esEnvase: true,
+        },
+      });
+
+      if (existente) {
+        throw new BadRequestException(
+          `La presentación ya tiene un envase asociado (regla ${existente.id}).`,
+        );
+      }
+    }
 
     try {
       return await this.repo.save(row);
@@ -123,13 +144,42 @@ export class InsumoConsumoPfService {
       );
     }
 
+    if (actual.presentacionId && actual.esEnvase) {
+      const existente = await this.repo
+        .createQueryBuilder('r')
+        .where('r.tenant_id = :tenantId', { tenantId })
+        .andWhere('r.activo = true')
+        .andWhere('r.es_envase = true')
+        .andWhere('r.presentacion_id = :pres', { pres: actual.presentacionId })
+        .andWhere('r.id <> :id', { id: actual.id })
+        .getOne();
+
+      if (existente) {
+        throw new BadRequestException(
+          `La presentación ya tiene un envase asociado (regla ${existente.id}).`,
+        );
+      }
+    }
+
+
+    let nextInsumo = actual.insumo; // por si ya viene eager
+    let nextInsumoId = actual.insumoId;
+
     if (dto.insumoId !== undefined) {
       const insumo = await this.insumoRepo.findOne({
         where: { id: dto.insumoId, tenantId },
       });
       if (!insumo) throw new NotFoundException('Insumo no encontrado');
+
+      nextInsumo = insumo;
+      nextInsumoId = insumo.id;
       actual.insumoId = insumo.id;
     }
+
+    // recalcular flag
+    const nextEsEnvase = Boolean((nextInsumo as any)?.esEnvase);
+    actual.esEnvase = nextEsEnvase;
+
 
     if (nextProductoFinalId) {
       const pf = await this.pfRepo.findOne({

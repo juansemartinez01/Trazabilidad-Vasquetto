@@ -5,17 +5,31 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LoteMP } from './../lotes/entities/lote-mp.entity';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   StockMovimiento,
   TipoMovimiento,
 } from './entities/stock-movimiento.entity';
 import { Deposito } from './../deposito/entities/deposito.entity';
-import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
+import { LotePfEstado, LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
 import { ProductoFinal } from '../producto-final/entities/producto-final.entity';
 import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
 import { StockMinimoPF } from '../configuracion/entities/stock-minimo-pf.entity';
 import { StockMinimoMP } from '../configuracion/entities/stock-minimo-mp.entity';
+import { QueryResumenPfDto } from './dto/query-resumen-pf.dto';
+
+
+
+function parseEstados(raw?: string): LotePfEstado[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+    .filter((x) => Object.values(LotePfEstado).includes(x as LotePfEstado))
+    .map((x) => x as LotePfEstado);
+}
+
 
 @Injectable()
 export class StockService {
@@ -476,9 +490,20 @@ export class StockService {
   // ======================================
   //   RESUMEN STOCK PRODUCTO FINAL (PF)
   // ======================================
-  async resumenStockPF(tenantId: string) {
+  async resumenStockPF(tenantId: string, q?: QueryResumenPfDto) {
+    const estados = [
+      ...(q?.estado ? [q.estado] : []),
+      ...parseEstados(q?.estados),
+    ];
+
+    const where: any = { tenantId };
+    if (estados.length) {
+      // si mandan estado/estados, filtramos
+      where.estado = In(estados);
+    }
+
     const lotes = await this.lotePFRepo.find({
-      where: { tenantId },
+      where,
       relations: ['productoFinal', 'deposito'],
       order: { fechaProduccion: 'DESC' },
     });
@@ -536,7 +561,6 @@ export class StockService {
     }
 
     return Array.from(map.values());
-    // idem, podés filtrar stockTotalKg > 0 si querés
   }
 
   async materiasPrimasBajoMinimo(tenantId: string) {

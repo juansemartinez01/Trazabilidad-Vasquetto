@@ -1,8 +1,9 @@
-import { Controller, Get, Param, Post, Body, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Post, Body, Req, UseGuards, Query } from '@nestjs/common';
 import { StockService } from './stock.service';
 import { TipoMovimiento } from './entities/stock-movimiento.entity';
 import { AuthGuard } from './../auth/guards/auth.guard';
 import { RegistrarMermaDto } from './dto/registrar-merma.dto';
+import { QueryResumenPfDto } from './dto/query-resumen-pf.dto';
 
 @Controller('stock')
 @UseGuards(AuthGuard)
@@ -22,8 +23,8 @@ export class StockController {
 
   // 🔹 NUEVO: resumen stock producto final
   @Get('resumen/pf')
-  resumenPF(@Req() req) {
-    return this.service.resumenStockPF(req.tenantId);
+  resumenPF(@Req() req, @Query() q: QueryResumenPfDto) {
+    return this.service.resumenStockPF(req.tenantId, q);
   }
 
   // ✅ NUEVO: MPs por debajo del mínimo

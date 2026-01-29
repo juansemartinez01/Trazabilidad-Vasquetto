@@ -677,6 +677,7 @@ export class EmpaquesService {
     const qb = this.unidadRepo
       .createQueryBuilder('u')
       .innerJoin('u.loteOrigen', 'l')
+      .innerJoin('l.productoFinal', 'pf')
       .innerJoin('u.presentacion', 'p')
       .innerJoin('u.deposito', 'd')
       .where('u.tenant_id = :tenantId', { tenantId });
@@ -698,6 +699,9 @@ export class EmpaquesService {
         'l.fecha_produccion AS "loteFechaProduccion"',
         'l.estado AS "loteEstado"',
 
+        'pf.id AS "productoFinalId"',
+        'pf.nombre AS "productoFinalNombre"',
+
         'p.id AS "presentacionId"',
         'p.codigo AS "presentacionCodigo"',
         'p.nombre AS "presentacionNombre"',
@@ -716,6 +720,8 @@ export class EmpaquesService {
       .addGroupBy('l.fecha_vencimiento')
       .addGroupBy('l.fecha_produccion')
       .addGroupBy('l.estado')
+      .addGroupBy('pf.id')
+      .addGroupBy('pf.nombre')
       .addGroupBy('p.id')
       .addGroupBy('p.codigo')
       .addGroupBy('p.nombre')

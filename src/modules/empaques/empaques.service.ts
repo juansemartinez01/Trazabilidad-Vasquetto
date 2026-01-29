@@ -813,6 +813,11 @@ export class EmpaquesService {
           id: g.depositoId,
           nombre: g.depositoNombre,
         },
+        productoFinal: {
+          
+          id: g.productoFinalId,
+          nombre: g.productoFinalNombre,
+        },
         totales: {
           total: Number(g.total ?? 0),
           disponibles: Number(g.disponibles ?? 0),

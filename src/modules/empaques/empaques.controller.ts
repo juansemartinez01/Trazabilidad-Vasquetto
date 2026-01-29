@@ -15,6 +15,7 @@ import { CreateEmpaqueDto } from './dto/create-empaque.dto';
 import { AddEmpaqueItemDto } from './dto/add-empaque-item.dto';
 import { QueryEmpaquesDto } from './dto/query-empaques.dto';
 import { QueryUnidadesEnvasadasDto } from './dto/query-unidades-envasadas.dto';
+import { DescartarUnidadesLoteDto } from './dto/descartar-unidades-lote.dto';
 
 @Controller('empaques')
 export class EmpaquesController {
@@ -68,5 +69,15 @@ export class EmpaquesController {
   @Get('unidades-envasadas/agrupadas')
   unidadesAgrupadas(@Req() req, @Query() q: QueryUnidadesEnvasadasDto) {
     return this.service.unidadesEnvasadasAgrupadas(req.tenantId, q);
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('unidades-envasadas/descartar')
+  descartarUnidades(@Req() req, @Body() dto: DescartarUnidadesLoteDto) {
+    return this.service.descartarUnidadesPorLote(
+      req.tenantId,
+      req.usuario.id,
+      dto,
+    );
   }
 }

@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { Empaque } from './entities/empaque.entity';
 import { EmpaqueItem } from './entities/empaque-item.entity';
 import { StockPresentacion } from './entities/stock-presentacion.entity';
@@ -29,6 +29,7 @@ import { InsumoMovimiento, TipoMovimientoInsumo } from '../insumo/entities/insum
 import { InsumoConsumoPfService } from '../insumo/insumo-consumo-pf.service';
 
 import { QueryUnidadesEnvasadasDto } from './dto/query-unidades-envasadas.dto';
+import { DescartarUnidadesLoteDto } from './dto/descartar-unidades-lote.dto';
 
 
 type GrupoKey = { loteId: string; presentacionId: string; depositoId: string };
@@ -665,183 +666,328 @@ export class EmpaquesService {
     });
   }
 
+  async unidadesEnvasadasAgrupadas(
+    tenantId: string,
+    q: QueryUnidadesEnvasadasDto,
+  ) {
+    const unidadesLimit = q.unidadesLimit ?? 200; // default sano
+    const unidadesOffset = q.unidadesOffset ?? 0;
 
+    // 1) GRUPOS + TOTALES
+    const qb = this.unidadRepo
+      .createQueryBuilder('u')
+      .innerJoin('u.loteOrigen', 'l')
+      .innerJoin('u.presentacion', 'p')
+      .innerJoin('u.deposito', 'd')
+      .where('u.tenant_id = :tenantId', { tenantId });
 
+    if (q.loteId) qb.andWhere('l.id = :loteId', { loteId: q.loteId });
+    if (q.presentacionId)
+      qb.andWhere('p.id = :presentacionId', {
+        presentacionId: q.presentacionId,
+      });
+    if (q.depositoId)
+      qb.andWhere('d.id = :depositoId', { depositoId: q.depositoId });
+    if (q.estado) qb.andWhere('u.estado = :estado', { estado: q.estado });
 
-async unidadesEnvasadasAgrupadas(tenantId: string, q: QueryUnidadesEnvasadasDto) {
-  const unidadesLimit = q.unidadesLimit ?? 200;   // default sano
-  const unidadesOffset = q.unidadesOffset ?? 0;
+    const gruposRaw = await qb
+      .select([
+        'l.id AS "loteId"',
+        'l.codigo_lote AS "loteCodigo"',
+        'l.fecha_vencimiento AS "loteFechaVencimiento"',
+        'l.fecha_produccion AS "loteFechaProduccion"',
+        'l.estado AS "loteEstado"',
 
-  // 1) GRUPOS + TOTALES
-  const qb = this.unidadRepo
-    .createQueryBuilder('u')
-    .innerJoin('u.loteOrigen', 'l')
-    .innerJoin('u.presentacion', 'p')
-    .innerJoin('u.deposito', 'd')
-    .where('u.tenant_id = :tenantId', { tenantId });
+        'p.id AS "presentacionId"',
+        'p.codigo AS "presentacionCodigo"',
+        'p.nombre AS "presentacionNombre"',
 
-  if (q.loteId) qb.andWhere('l.id = :loteId', { loteId: q.loteId });
-  if (q.presentacionId) qb.andWhere('p.id = :presentacionId', { presentacionId: q.presentacionId });
-  if (q.depositoId) qb.andWhere('d.id = :depositoId', { depositoId: q.depositoId });
-  if (q.estado) qb.andWhere('u.estado = :estado', { estado: q.estado });
+        'd.id AS "depositoId"',
+        'd.nombre AS "depositoNombre"',
 
-  const gruposRaw = await qb
-    .select([
-      'l.id AS "loteId"',
-      'l.codigo_lote AS "loteCodigo"',
-      'l.fecha_vencimiento AS "loteFechaVencimiento"',
-      'l.fecha_produccion AS "loteFechaProduccion"',
-      'l.estado AS "loteEstado"',
+        'COUNT(*)::int AS "total"',
+        `SUM(CASE WHEN u.estado = 'DISPONIBLE' THEN 1 ELSE 0 END)::int AS "disponibles"`,
+        `SUM(CASE WHEN u.estado = 'ENTREGADO' THEN 1 ELSE 0 END)::int AS "entregadas"`,
+        `SUM(CASE WHEN u.estado = 'ANULADO' THEN 1 ELSE 0 END)::int AS "anuladas"`,
+        `SUM(CASE WHEN u.estado = 'MERMA' THEN 1 ELSE 0 END)::int AS "merma"`,
+      ])
+      .groupBy('l.id')
+      .addGroupBy('l.codigo_lote')
+      .addGroupBy('l.fecha_vencimiento')
+      .addGroupBy('l.fecha_produccion')
+      .addGroupBy('l.estado')
+      .addGroupBy('p.id')
+      .addGroupBy('p.codigo')
+      .addGroupBy('p.nombre')
+      .addGroupBy('d.id')
+      .addGroupBy('d.nombre')
+      .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
+      .addOrderBy('l.fecha_produccion', 'ASC')
+      .addOrderBy('l.codigo_lote', 'ASC')
+      .getRawMany();
 
-      'p.id AS "presentacionId"',
-      'p.codigo AS "presentacionCodigo"',
-      'p.nombre AS "presentacionNombre"',
+    if (!gruposRaw.length) return { data: [], unidadesLimit, unidadesOffset };
 
-      'd.id AS "depositoId"',
-      'd.nombre AS "depositoNombre"',
+    // 2) Traer UNIDADES de los grupos encontrados (limit/offset global)
+    //    Si querés limit por grupo, te lo armo, pero esto es excelente primera versión.
+    const keys: GrupoKey[] = gruposRaw.map((g: any) => ({
+      loteId: g.loteId,
+      presentacionId: g.presentacionId,
+      depositoId: g.depositoId,
+    }));
 
-      'COUNT(*)::int AS "total"',
-      `SUM(CASE WHEN u.estado = 'DISPONIBLE' THEN 1 ELSE 0 END)::int AS "disponibles"`,
-      `SUM(CASE WHEN u.estado = 'ENTREGADO' THEN 1 ELSE 0 END)::int AS "entregadas"`,
-      `SUM(CASE WHEN u.estado = 'ANULADO' THEN 1 ELSE 0 END)::int AS "anuladas"`,
-      `SUM(CASE WHEN u.estado = 'MERMA' THEN 1 ELSE 0 END)::int AS "merma"`,
-    ])
-    .groupBy('l.id')
-    .addGroupBy('l.codigo_lote')
-    .addGroupBy('l.fecha_vencimiento')
-    .addGroupBy('l.fecha_produccion')
-    .addGroupBy('l.estado')
-    .addGroupBy('p.id')
-    .addGroupBy('p.codigo')
-    .addGroupBy('p.nombre')
-    .addGroupBy('d.id')
-    .addGroupBy('d.nombre')
-    .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
-    .addOrderBy('l.fecha_produccion', 'ASC')
-    .addOrderBy('l.codigo_lote', 'ASC')
-    .getRawMany();
+    // Construimos ORs (Postgres) para traer solo esas combinaciones
+    const unidadesQb = this.unidadRepo
+      .createQueryBuilder('u')
+      .innerJoin('u.loteOrigen', 'l')
+      .innerJoin('u.presentacion', 'p')
+      .innerJoin('u.deposito', 'd')
+      .where('u.tenant_id = :tenantId', { tenantId });
 
-  if (!gruposRaw.length) return { data: [], unidadesLimit, unidadesOffset };
+    // Reaplicamos filtros (por si vino estado)
+    if (q.estado)
+      unidadesQb.andWhere('u.estado = :estado', { estado: q.estado });
 
-  // 2) Traer UNIDADES de los grupos encontrados (limit/offset global)
-  //    Si querés limit por grupo, te lo armo, pero esto es excelente primera versión.
-  const keys: GrupoKey[] = gruposRaw.map((g: any) => ({
-    loteId: g.loteId,
-    presentacionId: g.presentacionId,
-    depositoId: g.depositoId,
-  }));
+    // OR por combinaciones
+    keys.forEach((k, idx) => {
+      const cond = `(l.id = :l${idx} AND p.id = :p${idx} AND d.id = :d${idx})`;
+      if (idx === 0) unidadesQb.andWhere(cond);
+      else unidadesQb.orWhere(cond);
 
-  // Construimos ORs (Postgres) para traer solo esas combinaciones
-  const unidadesQb = this.unidadRepo
-    .createQueryBuilder('u')
-    .innerJoin('u.loteOrigen', 'l')
-    .innerJoin('u.presentacion', 'p')
-    .innerJoin('u.deposito', 'd')
-    .where('u.tenant_id = :tenantId', { tenantId });
-
-  // Reaplicamos filtros (por si vino estado)
-  if (q.estado) unidadesQb.andWhere('u.estado = :estado', { estado: q.estado });
-
-  // OR por combinaciones
-  keys.forEach((k, idx) => {
-    const cond = `(l.id = :l${idx} AND p.id = :p${idx} AND d.id = :d${idx})`;
-    if (idx === 0) unidadesQb.andWhere(cond);
-    else unidadesQb.orWhere(cond);
-
-    unidadesQb.setParameter(`l${idx}`, k.loteId);
-    unidadesQb.setParameter(`p${idx}`, k.presentacionId);
-    unidadesQb.setParameter(`d${idx}`, k.depositoId);
-  });
-
-  const unidades = await unidadesQb
-    .select([
-      'u.id',
-      'u.codigoEtiqueta',
-      'u.estado',
-      'u.pesoKg',
-      'u.createdAt',
-
-      'l.fechaVencimiento', 
-      'l.fechaProduccion',
-      'l.id',
-      'p.id',
-      'd.id',
-    ])
-    .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
-    .addOrderBy('l.fecha_produccion', 'ASC')
-    .addOrderBy('u.createdAt', 'ASC')
-    .offset(unidadesOffset)
-    .limit(unidadesLimit)
-    .getMany();
-
-  // 3) Agrupar en memoria para armar el payload final
-  const map = new Map<string, any>();
-
-  for (const g of gruposRaw as any[]) {
-    const k = keyOf({ loteId: g.loteId, presentacionId: g.presentacionId, depositoId: g.depositoId });
-
-    map.set(k, {
-      lote: {
-        id: g.loteId,
-        codigo: g.loteCodigo,
-        fechaVencimiento: g.loteFechaVencimiento,
-        fechaProduccion: g.loteFechaProduccion,
-        estado: g.loteEstado,
-      },
-      presentacion: {
-        id: g.presentacionId,
-        codigo: g.presentacionCodigo,
-        nombre: g.presentacionNombre,
-      },
-      deposito: {
-        id: g.depositoId,
-        nombre: g.depositoNombre,
-      },
-      totales: {
-        total: Number(g.total ?? 0),
-        disponibles: Number(g.disponibles ?? 0),
-        entregadas: Number(g.entregadas ?? 0),
-        anuladas: Number(g.anuladas ?? 0),
-        merma: Number(g.merma ?? 0),
-      },
-      unidades: [] as Array<{
-        id: string;
-        codigoEtiqueta: string;
-        estado: string;
-        pesoKg: any;
-        createdAt: any;
-      }>,
+      unidadesQb.setParameter(`l${idx}`, k.loteId);
+      unidadesQb.setParameter(`p${idx}`, k.presentacionId);
+      unidadesQb.setParameter(`d${idx}`, k.depositoId);
     });
+
+    const unidades = await unidadesQb
+      .select([
+        'u.id',
+        'u.codigoEtiqueta',
+        'u.estado',
+        'u.pesoKg',
+        'u.createdAt',
+
+        'l.fechaVencimiento',
+        'l.fechaProduccion',
+        'l.id',
+        'p.id',
+        'd.id',
+      ])
+      .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
+      .addOrderBy('l.fecha_produccion', 'ASC')
+      .addOrderBy('u.createdAt', 'ASC')
+      .offset(unidadesOffset)
+      .limit(unidadesLimit)
+      .getMany();
+
+    // 3) Agrupar en memoria para armar el payload final
+    const map = new Map<string, any>();
+
+    for (const g of gruposRaw as any[]) {
+      const k = keyOf({
+        loteId: g.loteId,
+        presentacionId: g.presentacionId,
+        depositoId: g.depositoId,
+      });
+
+      map.set(k, {
+        lote: {
+          id: g.loteId,
+          codigo: g.loteCodigo,
+          fechaVencimiento: g.loteFechaVencimiento,
+          fechaProduccion: g.loteFechaProduccion,
+          estado: g.loteEstado,
+        },
+        presentacion: {
+          id: g.presentacionId,
+          codigo: g.presentacionCodigo,
+          nombre: g.presentacionNombre,
+        },
+        deposito: {
+          id: g.depositoId,
+          nombre: g.depositoNombre,
+        },
+        totales: {
+          total: Number(g.total ?? 0),
+          disponibles: Number(g.disponibles ?? 0),
+          entregadas: Number(g.entregadas ?? 0),
+          anuladas: Number(g.anuladas ?? 0),
+          merma: Number(g.merma ?? 0),
+        },
+        unidades: [] as Array<{
+          id: string;
+          codigoEtiqueta: string;
+          estado: string;
+          pesoKg: any;
+          createdAt: any;
+        }>,
+      });
+    }
+
+    for (const u of unidades as PFUnidadEnvasada[]) {
+      const loteId = (u.loteOrigen as any)?.id;
+      const presId = (u.presentacion as any)?.id;
+      const depId = (u.deposito as any)?.id;
+      const k = keyOf({ loteId, presentacionId: presId, depositoId: depId });
+
+      const grp = map.get(k);
+      if (!grp) continue;
+
+      grp.unidades.push({
+        id: u.id,
+        codigoEtiqueta: u.codigoEtiqueta,
+        estado: u.estado,
+        pesoKg: u.pesoKg,
+        createdAt: (u as any).createdAt,
+
+        // ✅ NUEVO: vence igual que el lote origen
+        fechaVencimiento: (u.loteOrigen as any)?.fechaVencimiento ?? null,
+        // opcional:
+        fechaProduccion: (u.loteOrigen as any)?.fechaProduccion ?? null,
+      });
+    }
+
+    return {
+      data: Array.from(map.values()),
+      unidadesLimit,
+      unidadesOffset,
+    };
   }
 
-  for (const u of unidades as PFUnidadEnvasada[]) {
-    const loteId = (u.loteOrigen as any)?.id;
-    const presId = (u.presentacion as any)?.id;
-    const depId = (u.deposito as any)?.id;
-    const k = keyOf({ loteId, presentacionId: presId, depositoId: depId });
+  async descartarUnidadesPorLote(
+    tenantId: string,
+    usuarioId: string,
+    dto: DescartarUnidadesLoteDto,
+  ) {
+    return this.ds.transaction(async (trx) => {
+      const unidadRepo = trx.getRepository(PFUnidadEnvasada);
+      const stockPresRepo = trx.getRepository(StockPresentacion);
+      const loteRepo = trx.getRepository(LoteProductoFinal);
+      const presRepo = trx.getRepository(PresentacionProductoFinal);
+      const depRepo = trx.getRepository(Deposito);
 
-    const grp = map.get(k);
-    if (!grp) continue;
+      // Validaciones base (existencia)
+      const lote = await loteRepo.findOne({
+        where: { id: dto.loteId, tenantId },
+      });
+      if (!lote) throw new NotFoundException('Lote PF no encontrado');
 
-    grp.unidades.push({
-      id: u.id,
-      codigoEtiqueta: u.codigoEtiqueta,
-      estado: u.estado,
-      pesoKg: u.pesoKg,
-      createdAt: (u as any).createdAt,
+      const pres = await presRepo.findOne({
+        where: { id: dto.presentacionId, tenantId },
+      });
+      if (!pres) throw new NotFoundException('Presentación no encontrada');
 
-      // ✅ NUEVO: vence igual que el lote origen
-      fechaVencimiento: (u.loteOrigen as any)?.fechaVencimiento ?? null,
-      // opcional:
-      fechaProduccion: (u.loteOrigen as any)?.fechaProduccion ?? null,
+      const dep = await depRepo.findOne({
+        where: { id: dto.depositoId, tenantId },
+      });
+      if (!dep) throw new NotFoundException('Depósito no encontrado');
+
+      // 1) Tomar N unidades DISPONIBLES del grupo (lote+pres+dep)
+      //    (bloqueo pesimista para evitar carreras)
+      const unidades = await unidadRepo
+        .createQueryBuilder('u')
+        .innerJoin('u.loteOrigen', 'l')
+        .innerJoin('u.presentacion', 'p')
+        .innerJoin('u.deposito', 'd')
+        .where('u.tenant_id = :tenantId', { tenantId })
+        .andWhere('l.id = :loteId', { loteId: dto.loteId })
+        .andWhere('p.id = :presId', { presId: dto.presentacionId })
+        .andWhere('d.id = :depId', { depId: dto.depositoId })
+        .andWhere('u.estado = :estado', { estado: 'DISPONIBLE' })
+        .orderBy('u.created_at', 'ASC')
+        .limit(dto.cantidad)
+        .setLock('pessimistic_write')
+        .getMany();
+
+      if (unidades.length === 0) {
+        throw new BadRequestException(
+          'No hay unidades DISPONIBLES para descartar en ese grupo',
+        );
+      }
+
+      if (unidades.length < dto.cantidad) {
+        throw new BadRequestException(
+          `Solo hay ${unidades.length} unidades DISPONIBLES (pediste ${dto.cantidad})`,
+        );
+      }
+
+      const ids = unidades.map((u) => u.id);
+
+      // 2) Update masivo de estado
+      await unidadRepo.update(
+        { tenantId, id: In(ids) as any },
+        { estado: dto.estadoDestino as any },
+      );
+
+      // 3) Ajustar stock_presentaciones (UNIDADES y opcional kg)
+      //    * Acá asumimos que estas unidades cuentan en stockUnidades.
+      let stock = await stockPresRepo.findOne({
+        where: {
+          tenantId,
+          presentacion: { id: pres.id } as any,
+          deposito: { id: dep.id } as any,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!stock) {
+        // si no existe, lo creamos en 0 y ajustamos (queda negativo si algo está muy mal)
+        stock = stockPresRepo.create({
+          tenantId,
+          presentacion: pres,
+          deposito: dep,
+          stockKg: 0,
+          stockUnidades: 0,
+        });
+      }
+
+      const totalUnidades = unidades.length;
+      const totalKg = unidades.reduce(
+        (acc, u) => acc + Number(u.pesoKg ?? 0),
+        0,
+      );
+
+      const nuevoUnidades = Number(stock.stockUnidades ?? 0) - totalUnidades;
+      if (nuevoUnidades < 0) {
+        throw new BadRequestException(
+          `El ajuste dejaría stockUnidades negativo (actual ${stock.stockUnidades}, descartar ${totalUnidades})`,
+        );
+      }
+
+      stock.stockUnidades = nuevoUnidades;
+
+      // opcional: si querés también reflejar kg (depende de cómo lo uses en tu UI)
+      // stock.stockKg = Number(stock.stockKg ?? 0) - totalKg;
+
+      await stockPresRepo.save(stock);
+
+      // 4) Auditoría
+      await this.auditoria.registrar(
+        tenantId,
+        usuarioId,
+        'UNIDADES_DESCARTADAS',
+        {
+          loteId: lote.id,
+          presentacionId: pres.id,
+          depositoId: dep.id,
+          cantidad: totalUnidades,
+          totalKg,
+          estadoDestino: dto.estadoDestino,
+          motivo: dto.motivo ?? null,
+          unidadIds: ids,
+        },
+      );
+
+      return {
+        ok: true,
+        loteId: lote.id,
+        presentacionId: pres.id,
+        depositoId: dep.id,
+        estadoDestino: dto.estadoDestino,
+        descartadas: totalUnidades,
+        totalKg: Number(totalKg.toFixed(6)),
+        unidadIds: ids,
+      };
     });
   }
-
-  return {
-    data: Array.from(map.values()),
-    unidadesLimit,
-    unidadesOffset,
-  };
-}
-
 }

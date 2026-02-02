@@ -44,12 +44,11 @@ export class LotesService {
 
     const qb = this.lotePfRepo
       .createQueryBuilder('l')
-      .where('l.tenant_id = :tenantId', { tenantId })
-      // joins controlados (solo lo necesario)
+      .where('l.tenantId = :tenantId', { tenantId })
       .leftJoin('l.deposito', 'dep')
       .leftJoin('l.productoFinal', 'pf');
 
-    // ✅ select “proyección” (evita traer todo el objeto PF/Deposito si no hace falta)
+    // ✅ usar PROPERTY PATHS (no nombres de columna DB)
     qb.select([
       'l.id',
       'l.codigoLote',
@@ -72,7 +71,7 @@ export class LotesService {
     if (q.q?.trim()) {
       const term = `%${q.q.trim()}%`;
       qb.andWhere(
-        `(l.codigo_lote ILIKE :term OR pf.nombre ILIKE :term OR pf.codigo ILIKE :term)`,
+        `(l.codigoLote ILIKE :term OR pf.nombre ILIKE :term OR pf.codigo ILIKE :term)`,
         { term },
       );
     }
@@ -86,38 +85,33 @@ export class LotesService {
         productoFinalId: q.productoFinalId,
       });
 
-    // rangos por producción
+    // rangos de producción
     if (q.produccionDesde)
-      qb.andWhere('l.fecha_produccion >= :pd', { pd: q.produccionDesde });
+      qb.andWhere('l.fechaProduccion >= :pd', { pd: q.produccionDesde });
     if (q.produccionHasta)
-      qb.andWhere('l.fecha_produccion <= :ph', { ph: q.produccionHasta });
+      qb.andWhere('l.fechaProduccion <= :ph', { ph: q.produccionHasta });
 
-    // rangos por vencimiento (incluye nulls? acá NO; si querés incluir nulls lo hacemos opcional)
+    // rangos de vencimiento
     if (q.vencimientoDesde)
-      qb.andWhere('l.fecha_vencimiento >= :vd', { vd: q.vencimientoDesde });
+      qb.andWhere('l.fechaVencimiento >= :vd', { vd: q.vencimientoDesde });
     if (q.vencimientoHasta)
-      qb.andWhere('l.fecha_vencimiento <= :vh', { vh: q.vencimientoHasta });
+      qb.andWhere('l.fechaVencimiento <= :vh', { vh: q.vencimientoHasta });
 
     // stock
-    const conStock = parseBool(q.conStock);
-    const sinStock = parseBool(q.sinStock);
+    const conStock = q.conStock === 'true';
+    const sinStock = q.sinStock === 'true';
 
-    if (conStock === true && sinStock === true) {
-      // no filtra (contradicción útil: trae todo)
-    } else if (conStock === true) {
-      qb.andWhere('l.cantidad_actual_kg > 0');
-    } else if (sinStock === true) {
-      qb.andWhere('l.cantidad_actual_kg <= 0');
-    }
+    if (conStock && !sinStock) qb.andWhere('l.cantidadActualKg > 0');
+    if (sinStock && !conStock) qb.andWhere('l.cantidadActualKg <= 0');
 
-    // ordenar seguro (whitelist)
+    // ✅ whitelist de orden con PROPERTY PATHS
     const sortMap: Record<string, string> = {
-      fechaProduccion: 'l.fecha_produccion',
-      fechaVencimiento: 'l.fecha_vencimiento',
-      codigoLote: 'l.codigo_lote',
+      fechaProduccion: 'l.fechaProduccion',
+      fechaVencimiento: 'l.fechaVencimiento',
+      codigoLote: 'l.codigoLote',
       estado: 'l.estado',
-      cantidadActualKg: 'l.cantidad_actual_kg',
-      createdAt: 'l.created_at',
+      cantidadActualKg: 'l.cantidadActualKg',
+      createdAt: 'l.createdAt',
     };
 
     const sortCol =
@@ -125,7 +119,6 @@ export class LotesService {
     const dir = (q.dir ?? 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     qb.orderBy(sortCol, dir as 'ASC' | 'DESC')
-      // desempate estable
       .addOrderBy('l.id', 'DESC')
       .skip(skip)
       .take(limit);
@@ -140,8 +133,6 @@ export class LotesService {
       items,
     };
   }
-
-  
 
   async cambiarEstadoPF(
     tenantId: string,

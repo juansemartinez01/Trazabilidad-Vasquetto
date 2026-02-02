@@ -18,6 +18,6 @@ export class OrdenIngrediente extends TenantBaseEntity {
   @Column('decimal')
   kgNecesarios: number;
 
-  @OneToMany(() => OrdenConsumo, (c) => c.ingrediente, { cascade: true })
+  @OneToMany(() => OrdenConsumo, (c) => c.ingrediente, { cascade: false })
   consumos: OrdenConsumo[];
 }

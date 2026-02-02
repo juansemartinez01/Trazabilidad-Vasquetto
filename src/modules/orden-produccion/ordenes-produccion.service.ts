@@ -127,8 +127,11 @@ export class OrdenesProduccionService {
       throw new BadRequestException('Responsable inválido');
     }
 
-    orden.estado = 'procesando';
-    await this.ordenRepo.save(orden);
+    await this.ordenRepo.update(
+      { id: orden.id, tenantId },
+      { estado: 'procesando' as any },
+    );
+
 
     let loteFinalId: string | null = null;
 
@@ -229,9 +232,14 @@ export class OrdenesProduccionService {
         orden.id,
       );
 
-      orden.estado = 'finalizada';
-      orden.loteFinal = loteFinal;
-      await this.ordenRepo.save(orden);
+      await this.ordenRepo.update(
+        { id: orden.id, tenantId },
+        {
+          estado: 'finalizada' as any,
+          loteFinal: { id: loteFinal.id } as any,
+        },
+      );
+
 
       await this.auditoria.registrar(
         tenantId,

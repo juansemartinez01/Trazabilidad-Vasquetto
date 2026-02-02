@@ -242,24 +242,34 @@ export class OrdenesProduccionService {
 
       return this.obtener(tenantId, orden.id);
     } catch (e) {
-      try {
-        if (loteFinalId) {
-          // 1) borrar movimientos que referencian al lote (FK)
-          await this.stockMovRepo.delete({
-            tenantId,
-            lotePF: { id: loteFinalId } as any, // TypeORM permite nested where
-          });
+  try {
+    if (loteFinalId) {
+      // 1) borrar movimientos que referencian al lote (FK)
+      await this.stockMovRepo.delete({
+        tenantId,
+        lotePF: { id: loteFinalId } as any,
+      });
 
-          // 2) ahora sí se puede borrar el lote
-          await this.lotePFRepo.delete({ id: loteFinalId, tenantId });
-        }
-      } finally {
-        orden.estado = 'pendiente';
-        await this.ordenRepo.save(orden);
-      }
-
-      throw e;
+      // 2) borrar el lote PF
+      await this.lotePFRepo.delete({ id: loteFinalId, tenantId });
     }
+  } finally {
+    // ✅ CLAVE: rollback de la orden SIN save() para no arrastrar lote_final_id
+    await this.ordenRepo.update(
+      { id: orden.id, tenantId },
+      {
+        estado: 'pendiente',
+        loteFinal: null as any,          // ✅ limpia FK
+        // observaciones: orden.observaciones ?? null, // opcional si querés mantener
+      },
+    );
+
+    // (opcional) por las dudas también limpiamos el objeto en memoria
+    (orden as any).loteFinal = null;
+  }
+
+  throw e;
+}
   }
 
   /** ============================

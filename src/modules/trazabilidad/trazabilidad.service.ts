@@ -82,24 +82,23 @@ export class TrazabilidadService {
 
     // 1) Consumido en órdenes -> PF (vía joins)
     const consumos = await this.consumoRepo
-  .createQueryBuilder('c')
-  .innerJoin('c.ingrediente', 'ing')
-  .innerJoin('ing.orden', 'op')
-  .leftJoin('op.loteFinal', 'pf')
-  .leftJoin('pf.productoFinal', 'pfProd')
-  .where('c.tenantId = :tenantId', { tenantId })
-  .andWhere('c.lote_id = :loteMpId', { loteMpId }) // ✅
-  .select([
-    'c.id as consumo_id',
-    'c.cantidadKg as consumo_kg',
-    'op.id as orden_id',
-    'pf.id as pf_id',
-    'pf.codigoLote as pf_codigo',
-    'pf.estado as pf_estado',
-    'pfProd.nombre as pf_nombre',
-  ])
-  .getRawMany
-<{
+      .createQueryBuilder('c')
+      .innerJoin('c.ingrediente', 'ing')
+      .innerJoin('ing.orden', 'op')
+      .leftJoin('op.loteFinal', 'pf')
+      .leftJoin('pf.productoFinal', 'pfProd')
+      .where('c.tenantId = :tenantId', { tenantId })
+      .andWhere('c.lote_id = :loteMpId', { loteMpId }) // ✅
+      .select([
+        'c.id as consumo_id',
+        'c.cantidadKg as consumo_kg',
+        'op.id as orden_id',
+        'pf.id as pf_id',
+        'pf.codigoLote as pf_codigo',
+        'pf.estado as pf_estado',
+        'pfProd.nombre as pf_nombre',
+      ])
+      .getRawMany<{
         consumo_id: string;
         consumo_kg: string;
         orden_id: string;
@@ -296,10 +295,11 @@ export class TrazabilidadService {
         'pres.codigo as pres_codigo',
         'pres.nombre as pres_nombre',
         'cli.id as cliente_id',
-        'cli.nombre as cliente_nombre',
         'e.numeroRemito as numero_remito',
         'e.fecha as entrega_fecha',
       ])
+      // ✅ IMPORTANTE: usar la propiedad del entity (razonSocial) para que TypeORM mapee a razon_social
+      .addSelect('cli.razonSocial', 'cliente_nombre')
       .getRawMany<{
         item_id: string;
         pf_id: string;

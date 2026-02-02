@@ -88,31 +88,69 @@ export class ProductoFinalService {
     pf.vidaUtilDias = dto.vidaUtilDias ?? pf.vidaUtilDias;
     pf.especificaciones = dto.especificaciones ?? pf.especificaciones;
 
-    // Reemplazo simple de presentaciones (robusto y fácil)
     if (dto.presentaciones) {
-      // borrado lógico no tenés; hacemos hard replace
-      await this.presRepo
-        .createQueryBuilder()
-        .delete()
-        .from(PresentacionProductoFinal)
-        .where('tenant_id = :tenantId', { tenantId })
-        .andWhere('producto_final_id = :id', { id })
-        .execute();
+      // 1) Traemos presentaciones actuales del PF
+      const actuales = await this.presRepo.find({
+        where: { tenantId, productoFinal: { id: pf.id } as any },
+      });
 
+      const actualesPorCodigo = new Map(actuales.map((p) => [p.codigo, p]));
+      const incomingCodigos = new Set(dto.presentaciones.map((p) => p.codigo));
 
+      const nuevas: PresentacionProductoFinal[] = [];
 
-      pf.presentaciones = dto.presentaciones.map((p) =>
-        this.presRepo.create({
-          tenantId,
-          productoFinal: pf,
-          codigo: p.codigo,
-          nombre: p.nombre,
-          unidadVenta: p.unidadVenta,
-          pesoPorUnidadKg: p.pesoPorUnidadKg ?? null,
-          activa: p.activa ?? true,
-        }),
-      );
+      // 2) Upsert por "codigo" (es único por tenant según tu index)
+      for (const p of dto.presentaciones) {
+        const unidad = p.unidadVenta;
+        const peso = p.pesoPorUnidadKg ?? null;
+
+        if (unidad !== UnidadVenta.KG && (!peso || Number(peso) <= 0)) {
+          throw new BadRequestException(
+            `La presentación ${p.codigo} requiere pesoPorUnidadKg si unidadVenta es ${unidad}`,
+          );
+        }
+
+        const existente = actualesPorCodigo.get(p.codigo);
+
+        if (existente) {
+          // update in-place (NO rompe FK)
+          existente.nombre = p.nombre ?? existente.nombre;
+          existente.unidadVenta = unidad ?? existente.unidadVenta;
+          existente.pesoPorUnidadKg = peso;
+          existente.activa = p.activa ?? true;
+        } else {
+          // create new
+          nuevas.push(
+            this.presRepo.create({
+              tenantId,
+              productoFinal: pf,
+              codigo: p.codigo,
+              nombre: p.nombre,
+              unidadVenta: unidad,
+              pesoPorUnidadKg: peso,
+              activa: p.activa ?? true,
+            }),
+          );
+        }
+      }
+
+      // 3) Las que ya no vienen en el request => desactivar (NO borrar)
+      for (const a of actuales) {
+        if (!incomingCodigos.has(a.codigo)) {
+          a.activa = false;
+        }
+      }
+
+      // 4) Guardamos updates + inserts
+      await this.presRepo.save([...actuales, ...nuevas]);
+
+      // 5) Refrescamos relación en memoria (opcional)
+      pf.presentaciones = await this.presRepo.find({
+        where: { tenantId, productoFinal: { id: pf.id } as any },
+        order: { codigo: 'ASC' as any },
+      });
     }
+
 
     await this.pfRepo.save(pf);
     return this.obtener(tenantId, id);

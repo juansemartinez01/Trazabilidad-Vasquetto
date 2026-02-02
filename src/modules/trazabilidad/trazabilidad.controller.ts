@@ -1,36 +1,32 @@
-import {
-  Controller,
-  Get,
-  Param,
-  Post,
-  Body,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
-
+// src/modules/trazabilidad/trazabilidad.controller.ts
+import { Controller, Get, Param, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from './../auth/guards/auth.guard';
 import { TrazabilidadService } from './trazabilidad.service';
 
 @Controller('trazabilidad')
 @UseGuards(AuthGuard)
 export class TrazabilidadController {
-  constructor(private service: TrazabilidadService) {}
+  constructor(private readonly service: TrazabilidadService) {}
 
-  @Get('pf/:id')
-  trazabilidadPF(@Req() req, @Param('id') id: string) {
-    return this.service.trazabilidadPF(req.tenantId, id);
+  // MP -> PF -> Clientes/Entregas
+  @Get('grafo/mp/:id')
+  grafoDesdeMP(@Req() req, @Param('id') id: string) {
+    return this.service.grafoDesdeMP(req.tenantId, id);
   }
 
-  @Get('mp/:id')
-  trazabilidadMP(@Req() req, @Param('id') id: string) {
-    return this.service.trazabilidadMP(req.tenantId, id);
+  // Entrega -> PF -> MP
+  @Get('grafo/entrega/:id')
+  grafoDesdeEntrega(@Req() req, @Param('id') id: string) {
+    return this.service.grafoDesdeEntrega(req.tenantId, id);
   }
 
-  @Get('cliente/:id')
-  trazabilidadCliente(@Req() req, @Param('id') id: string) {
-    return this.service.trazabilidadCliente(req.tenantId, id);
+  // PF (completo): backward MP + forward clientes/entregas
+  @Get('grafo/pf/:id')
+  grafoDesdePF(@Req() req, @Param('id') id: string) {
+    return this.service.grafoDesdePF(req.tenantId, id);
   }
 
+  // Buscador unificado (id puede ser lote MP, lote PF o entrega)
   @Get('buscar/:id')
   buscar(@Req() req, @Param('id') id: string) {
     return this.service.buscar(req.tenantId, id);

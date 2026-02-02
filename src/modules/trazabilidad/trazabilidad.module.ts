@@ -1,28 +1,28 @@
+// src/modules/trazabilidad/trazabilidad.module.ts
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { LoteMP } from '../lotes/entities/lote-mp.entity';
 
-import { Deposito } from '../deposito/entities/deposito.entity';
+import { TrazabilidadController } from './trazabilidad.controller';
+import { TrazabilidadService } from './trazabilidad.service';
+
+import { LoteMP } from '../lotes/entities/lote-mp.entity';
 import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
-import { OrdenProduccion } from '../orden-produccion/entities/orden-produccion.entity';
 import { OrdenConsumo } from '../orden-produccion/entities/orden-consumo.entity';
 import { EntregaItem } from '../entregas/entities/entrega-item.entity';
-import { TrazabilidadService } from './trazabilidad.service';
-import { TrazabilidadController } from './trazabilidad.controller';
-import { Cliente } from '../clientes/entities/cliente.entity';
+import { Entrega } from '../entregas/entities/entrega.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       LoteMP,
       LoteProductoFinal,
-      OrdenProduccion,
       OrdenConsumo,
       EntregaItem,
-      Cliente,
+      Entrega,
     ]),
   ],
-  providers: [TrazabilidadService],
   controllers: [TrazabilidadController],
+  providers: [TrazabilidadService],
+  exports: [TrazabilidadService],
 })
 export class TrazabilidadModule {}

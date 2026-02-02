@@ -153,11 +153,12 @@ export class OrdenesProduccionService {
           await this.consumoRepo.save(
             this.consumoRepo.create({
               tenantId,
-              ingrediente: ing,
-              lote: lote.lote,
+              ingrediente: { id: ing.id } as any,
+              lote: { id: lote.lote.id } as any,
               cantidadKg: lote.cantidad,
             }),
           );
+
         }
       }
 

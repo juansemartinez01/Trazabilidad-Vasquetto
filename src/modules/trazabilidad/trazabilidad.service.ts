@@ -515,13 +515,15 @@ export class TrazabilidadService {
         'e.numeroRemito as numero_remito',
         'e.fecha as entrega_fecha',
         'cli.id as cliente_id',
-        'cli.nombre as cliente_nombre',
+        // ❌ NO: 'cli.nombre as cliente_nombre'
         'it.cantidadKg as cantidad_kg',
         'it.cantidadBultos as cantidad_bultos',
         'pres.id as pres_id',
         'pres.codigo as pres_codigo',
         'pres.nombre as pres_nombre',
       ])
+      // ✅ IMPORTANTE: usar la propiedad del entity para que TypeORM mapee a razon_social
+      .addSelect('cli.razonSocial', 'cliente_nombre')
       .getRawMany<{
         item_id: string;
         entrega_id: string;

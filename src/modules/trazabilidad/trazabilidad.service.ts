@@ -129,7 +129,7 @@ export class TrazabilidadService {
             'e.numeroRemito as numero_remito',
             'e.fecha as entrega_fecha',
             'cli.id as cliente_id',
-            'cli.nombre as cliente_nombre',
+            'cli.razon_social as cliente_nombre',
             'it.cantidadKg as cantidad_kg',
             'it.cantidadBultos as cantidad_bultos',
             'pres.id as pres_id',

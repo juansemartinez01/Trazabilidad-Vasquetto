@@ -12,7 +12,7 @@ import { OrdenConsumo } from './entities/orden-consumo.entity';
 import { LotePfEstado, LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
 import { Deposito } from '../deposito/entities/deposito.entity';
 import { StockService } from '../stock-movimiento/stock.service';
-import { TipoMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
+import { StockMovimiento, TipoMovimiento } from '../stock-movimiento/entities/stock-movimiento.entity';
 import { AuditoriaService } from '../auditoria/auditoria.service';
 import { Usuario } from '../usuarios/entities/usuarios.entity';
 
@@ -32,6 +32,8 @@ export class OrdenesProduccionService {
     private stockService: StockService,
     private auditoria: AuditoriaService,
     @InjectRepository(Usuario) private usuariosRepo: Repository<Usuario>,
+    @InjectRepository(StockMovimiento)
+    private readonly stockMovRepo: Repository<StockMovimiento>,
   ) {}
 
   /** ============================
@@ -158,7 +160,6 @@ export class OrdenesProduccionService {
               cantidadKg: lote.cantidad,
             }),
           );
-
         }
       }
 
@@ -241,11 +242,22 @@ export class OrdenesProduccionService {
 
       return this.obtener(tenantId, orden.id);
     } catch (e) {
-      if (loteFinalId) {
-        await this.lotePFRepo.delete({ id: loteFinalId, tenantId });
+      try {
+        if (loteFinalId) {
+          // 1) borrar movimientos que referencian al lote (FK)
+          await this.stockMovRepo.delete({
+            tenantId,
+            lotePF: { id: loteFinalId } as any, // TypeORM permite nested where
+          });
+
+          // 2) ahora sí se puede borrar el lote
+          await this.lotePFRepo.delete({ id: loteFinalId, tenantId });
+        }
+      } finally {
+        orden.estado = 'pendiente';
+        await this.ordenRepo.save(orden);
       }
-      orden.estado = 'pendiente';
-      await this.ordenRepo.save(orden);
+
       throw e;
     }
   }

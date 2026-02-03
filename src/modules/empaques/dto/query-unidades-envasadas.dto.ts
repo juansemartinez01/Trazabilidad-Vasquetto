@@ -1,5 +1,5 @@
 // src/modules/empaques/dto/query-unidades-envasadas.dto.ts
-import { IsOptional, IsUUID, IsIn, IsInt, Min } from 'class-validator';
+import { IsOptional, IsUUID, IsIn, IsInt, Min, IsBooleanString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class QueryUnidadesEnvasadasDto {
@@ -18,6 +18,17 @@ export class QueryUnidadesEnvasadasDto {
   @IsOptional()
   @IsIn(['DISPONIBLE', 'ENTREGADO', 'ANULADO', 'MERMA'])
   estado?: 'DISPONIBLE' | 'ENTREGADO' | 'ANULADO' | 'MERMA';
+
+  // ✅ NUEVO: filtrar grupos con disponibles > 0
+  // (viene como string 'true'/'false' en querystring)
+  @IsOptional()
+  @IsBooleanString()
+  soloDisponibles?: string; // 'true' | 'false'
+
+  // ✅ NUEVO: traer o no el detalle de unidades (etiquetas)
+  @IsOptional()
+  @IsBooleanString()
+  traerDetalle?: string; // 'true' | 'false'
 
   // paginado de unidades por grupo (para no traer 50k etiquetas)
   @IsOptional()

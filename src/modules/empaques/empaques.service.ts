@@ -44,6 +44,19 @@ function dec(n: any) {
   return v;
 }
 
+
+function parseBool(v: any, def = false): boolean {
+  if (v === true || v === false) return v;
+  if (v === null || v === undefined) return def;
+
+  const s = String(v).trim().toLowerCase();
+  if (['true', '1', 'yes', 'si'].includes(s)) return true;
+  if (['false', '0', 'no'].includes(s)) return false;
+
+  return def;
+}
+
+
 @Injectable()
 export class EmpaquesService {
   constructor(
@@ -673,6 +686,11 @@ export class EmpaquesService {
     const unidadesLimit = q.unidadesLimit ?? 200; // default sano
     const unidadesOffset = q.unidadesOffset ?? 0;
 
+
+    // ✅ NUEVO: flags
+  const soloDisponibles = parseBool((q as any).soloDisponibles, false);
+  const traerDetalle = parseBool((q as any).traerDetalle, true);
+
     // 1) GRUPOS + TOTALES
     const qb = this.unidadRepo
       .createQueryBuilder('u')
@@ -727,6 +745,12 @@ export class EmpaquesService {
       .addGroupBy('p.nombre')
       .addGroupBy('d.id')
       .addGroupBy('d.nombre')
+      // ✅ NUEVO: filtrar solo grupos con disponibles > 0
+      .having(
+        soloDisponibles
+          ? `SUM(CASE WHEN u.estado = 'DISPONIBLE' THEN 1 ELSE 0 END) > 0`
+          : '1=1',
+      )
       .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
       .addOrderBy('l.fecha_produccion', 'ASC')
       .addOrderBy('l.codigo_lote', 'ASC')
@@ -834,6 +858,15 @@ export class EmpaquesService {
         }>,
       });
     }
+
+    // ✅ NUEVO: si no quiere detalle, cortamos acá (no consultamos etiquetas)
+  if (!traerDetalle) {
+    return {
+      data: Array.from(map.values()),
+      unidadesLimit,
+      unidadesOffset,
+    };
+  }
 
     for (const u of unidades as PFUnidadEnvasada[]) {
       const loteId = (u.loteOrigen as any)?.id;

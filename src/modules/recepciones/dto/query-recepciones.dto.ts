@@ -108,4 +108,9 @@ export class QueryRecepcionesDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  // Filtro directo (opcional)
+  @IsOptional()
+  @IsString()
+  detalleLotesDefectuosos?: string;
 }

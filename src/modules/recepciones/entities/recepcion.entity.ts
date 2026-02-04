@@ -22,4 +22,8 @@ export class Recepcion extends TenantBaseEntity {
 
   @OneToMany(() => LoteMP, (lote) => lote.recepcion, { cascade: true })
   lotes: LoteMP[];
+
+  // ✅ NUEVO: texto MUY largo opcional (Postgres: TEXT)
+  @Column({ type: 'text', nullable: true })
+  detalleLotesDefectuosos?: string;
 }

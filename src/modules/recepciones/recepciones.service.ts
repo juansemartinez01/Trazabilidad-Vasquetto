@@ -31,6 +31,12 @@ export class RecepcionesService {
       transportista: dto.transportista,
       proveedor: { id: dto.proveedorId },
       documentos: dto.documentos,
+
+      // ✅ NUEVO
+      detalleLotesDefectuosos:
+        typeof dto.detalleLotesDefectuosos === 'string'
+          ? dto.detalleLotesDefectuosos
+          : null,
     });
 
     await this.recepcionRepo.save(recepcion);
@@ -146,6 +152,13 @@ export class RecepcionesService {
       qb.andWhere('p.nombre ILIKE :pn', { pn: `%${q.proveedorNombre}%` });
     }
 
+    if ((q as any).detalleLotesDefectuosos) {
+      qb.andWhere('r.detalle_lotes_defectuosos ILIKE :dld', {
+        dld: `%${(q as any).detalleLotesDefectuosos}%`,
+      });
+    }
+
+
     // Filtros por Lote / MP / Depósito
     if (q.codigoLote) {
       qb.andWhere('l.codigo_lote ILIKE :cl', { cl: `%${q.codigoLote}%` });
@@ -189,6 +202,7 @@ export class RecepcionesService {
           r.numero_remito ILIKE :s
           OR r.transportista ILIKE :s
           OR p.nombre ILIKE :s
+          OR r.detalle_lotes_defectuosos ILIKE :s
           OR l.codigo_lote ILIKE :s
           OR mp.nombre ILIKE :s
           OR d.nombre ILIKE :s
@@ -335,6 +349,12 @@ export class RecepcionesService {
       recepcion.documentos = dto.documentos; // jsonb
     }
 
+    if (dto.detalleLotesDefectuosos !== undefined) {
+      // si viene string vacío, se guarda vacío; si querés null cuando esté vacío, lo ajustamos
+      recepcion.detalleLotesDefectuosos = dto.detalleLotesDefectuosos;
+    }
+
+
     // 4) Guardar
     await this.recepcionRepo.save(recepcion);
 
@@ -375,6 +395,9 @@ export class RecepcionesService {
           'r.fechaRemito',
           'r.transportista',
           'r.documentos',
+
+          // ✅ NUEVO
+          'r.detalleLotesDefectuosos',
         ])
         .where('r.id = :id', { id: recepcionId })
         .andWhere('r.tenant_id = :tenantId', { tenantId })

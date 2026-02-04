@@ -29,4 +29,9 @@ export class UpdateRecepcionDto {
   @IsOptional()
   @IsObject()
   documentos?: any; // remito PDF u otros adjuntos
+
+  // ✅ NUEVO: texto largo opcional
+  @IsOptional()
+  @IsString()
+  detalleLotesDefectuosos?: string;
 }

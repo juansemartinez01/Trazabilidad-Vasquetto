@@ -5,6 +5,7 @@ import { LoteMP } from './entities/lote-mp.entity';
 import { LotePfEstado, LoteProductoFinal } from './entities/lote-producto-final.entity';
 import { CambiarEstadoLotePfDto } from './dto/cambiar-estado-lote-pf.dto';
 import { QueryLotesPfDto } from './dto/query-lotes-pf.dto';
+import { QueryLotesMpDto } from './dto/query-lotes-mp.dto';
 
 
 function parseBool(v?: string): boolean | null {
@@ -27,12 +28,98 @@ export class LotesService {
   ) {}
 
   /** LOTES DE MATERIA PRIMA */
-  listarLotesMP(tenantId: string) {
-    return this.loteMpRepo.find({
-      where: { tenantId },
-      relations: ['materiaPrima', 'deposito'],
-      order: { fechaVencimiento: 'ASC' },
-    });
+  async listarLotesMP(tenantId: string, q: QueryLotesMpDto) {
+    const page = q.page ?? 1;
+    const limit = q.limit ?? 30;
+    const skip = (page - 1) * limit;
+
+    const qb = this.loteMpRepo
+      .createQueryBuilder('l')
+      .where('l.tenantId = :tenantId', { tenantId })
+      .leftJoin('l.deposito', 'dep')
+      .leftJoin('l.materiaPrima', 'mp');
+
+    qb.select([
+      'l.id',
+      'l.codigoLote',
+      'l.cantidadInicialKg',
+      'l.cantidadActualKg',
+      'l.fechaElaboracion',
+      'l.fechaAnalisis',
+      'l.fechaVencimiento',
+      'l.analisis',
+      'l.documentos',
+      'l.createdAt',
+      'dep.id',
+      'dep.nombre',
+      'mp.id',
+      'mp.nombre',
+      'mp.unidadMedida',
+      'mp.descripcion',
+    ]);
+
+    // 🔎 búsqueda libre
+    if (q.q?.trim()) {
+      const term = `%${q.q.trim()}%`;
+      qb.andWhere(`(l.codigoLote ILIKE :term OR mp.nombre ILIKE :term)`, {
+        term,
+      });
+    }
+
+    // filtros directos
+    if (q.depositoId)
+      qb.andWhere('dep.id = :depositoId', { depositoId: q.depositoId });
+
+    if (q.materiaPrimaId)
+      qb.andWhere('mp.id = :materiaPrimaId', {
+        materiaPrimaId: q.materiaPrimaId,
+      });
+
+    // rangos de elaboración
+    if (q.elaboracionDesde)
+      qb.andWhere('l.fechaElaboracion >= :ed', { ed: q.elaboracionDesde });
+    if (q.elaboracionHasta)
+      qb.andWhere('l.fechaElaboracion <= :eh', { eh: q.elaboracionHasta });
+
+    // rangos de vencimiento
+    if (q.vencimientoDesde)
+      qb.andWhere('l.fechaVencimiento >= :vd', { vd: q.vencimientoDesde });
+    if (q.vencimientoHasta)
+      qb.andWhere('l.fechaVencimiento <= :vh', { vh: q.vencimientoHasta });
+
+    // stock
+    const conStock = q.conStock === 'true';
+    const sinStock = q.sinStock === 'true';
+    if (conStock && !sinStock) qb.andWhere('l.cantidadActualKg > 0');
+    if (sinStock && !conStock) qb.andWhere('l.cantidadActualKg <= 0');
+
+    // orden whitelist
+    const sortMap: Record<string, string> = {
+      fechaElaboracion: 'l.fechaElaboracion',
+      fechaVencimiento: 'l.fechaVencimiento',
+      codigoLote: 'l.codigoLote',
+      cantidadActualKg: 'l.cantidadActualKg',
+      createdAt: 'l.createdAt',
+    };
+
+    const sortCol =
+      sortMap[q.sort ?? 'fechaVencimiento'] ?? sortMap.fechaVencimiento;
+    const dir = (q.dir ?? 'ASC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    qb.orderBy(sortCol, dir as 'ASC' | 'DESC')
+      .addOrderBy('l.id', 'DESC')
+      .skip(skip)
+      .take(limit);
+
+    const [items, total] = await qb.getManyAndCount();
+
+    return {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      items,
+    };
   }
 
   /** LOTES DE PRODUCTO FINAL */

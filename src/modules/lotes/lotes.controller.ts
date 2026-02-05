@@ -2,6 +2,7 @@ import { Controller, Get, Req, BadRequestException, Patch, Param, Body, Query } 
 import { LotesService } from './lotes.service';
 import { CambiarEstadoLotePfDto } from './dto/cambiar-estado-lote-pf.dto';
 import { QueryLotesPfDto } from './dto/query-lotes-pf.dto';
+import { QueryLotesMpDto } from './dto/query-lotes-mp.dto';
 
 @Controller('lotes')
 export class LotesController {
@@ -26,9 +27,9 @@ export class LotesController {
    *  LISTAR LOTES DE MATERIA PRIMA
    ============================== */
   @Get('mp')
-  listarMP(@Req() req) {
+  listarMP(@Req() req, @Query() q: QueryLotesMpDto) {
     const tenantId = this.getTenantId(req);
-    return this.lotesService.listarLotesMP(tenantId);
+    return this.lotesService.listarLotesMP(tenantId, q);
   }
 
   /** =============================

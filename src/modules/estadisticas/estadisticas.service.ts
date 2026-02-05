@@ -436,15 +436,15 @@ export class EstadisticasService {
     qb.select([
       `${bucketExpr} AS "periodo"`,
       `p.id AS "proveedorId"`,
-      `p.nombre AS "proveedorNombre"`, // 👈 si es razonSocial, cambiá acá
+      `p.razonSocial AS "proveedorNombre"`, // 👈 si es razonSocial, cambiá acá
       `COALESCE(SUM(l.cantidadInicialKg), 0) AS "cantidadKg"`,
       `COUNT(DISTINCT r.id) AS "recepciones"`,
     ])
       .groupBy('"periodo"')
       .addGroupBy('p.id')
-      .addGroupBy('p.nombre')
+      .addGroupBy('p.razonSocial')
       .orderBy('"periodo"', 'ASC')
-      .addOrderBy('p.nombre', 'ASC');
+      .addOrderBy('p.razonSocial', 'ASC');
 
     const rows = await qb.getRawMany<{
       periodo: any;

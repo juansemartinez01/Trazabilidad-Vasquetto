@@ -21,6 +21,20 @@ export class RecetasController {
     return this.service.crear(req.tenantId, req.usuario.id, dto);
   }
 
+  @Post(':recetaId/versiones/:versionId/activar')
+  activarVersion(
+    @Param('recetaId') recetaId: string,
+    @Param('versionId') versionId: string,
+    @Req() req,
+  ) {
+    return this.service.activarVersion(
+      req.tenantId,
+      recetaId,
+      versionId,
+      req.usuario.id,
+    );
+  }
+
   @Put(':id')
   actualizar(@Param('id') recetaId: string, @Body() dto, @Req() req) {
     return this.service.actualizar(req.tenantId, recetaId, req.usuario.id, dto);

@@ -188,4 +188,60 @@ export class RecetasService {
       kgNecesarios: (cantidadKg * i.porcentaje) / 100,
     }));
   }
+
+  async activarVersion(
+    tenantId: string,
+    recetaId: string,
+    versionId: string,
+    usuarioId: string,
+  ) {
+    return this.versionRepo.manager.transaction(async (manager) => {
+      const vRepo = manager.getRepository(RecetaVersion);
+
+      // 1) Verificar que la versión exista y sea de esa receta
+      const version = await vRepo.findOne({
+        where: {
+          id: versionId,
+          tenantId,
+          receta: { id: recetaId } as any,
+        } as any,
+        relations: ['receta'],
+      });
+
+      if (!version) {
+        throw new NotFoundException('Versión no encontrada para esa receta');
+      }
+
+      // 2) Desactivar todas las versiones de esa receta
+      await vRepo
+        .createQueryBuilder()
+        .update(RecetaVersion)
+        .set({ activa: false })
+        .where('tenant_id = :tenantId', { tenantId })
+        .andWhere('receta_id = :recetaId', { recetaId })
+        .execute();
+
+      // 3) Activar la seleccionada
+      await vRepo
+        .createQueryBuilder()
+        .update(RecetaVersion)
+        .set({ activa: true })
+        .where('tenant_id = :tenantId', { tenantId })
+        .andWhere('id = :versionId', { versionId })
+        .execute();
+
+      await this.auditoria.registrar(
+        tenantId,
+        usuarioId,
+        'RECETA_VERSION_ACTIVADA',
+        {
+          recetaId,
+          versionId,
+        },
+      );
+
+      // 4) Devolver receta completa (como venís haciendo)
+      return this.findOne(recetaId, tenantId);
+    });
+  }
 }

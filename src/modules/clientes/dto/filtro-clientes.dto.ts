@@ -11,6 +11,10 @@ export class FiltroClientesDto {
 
   @IsOptional()
   @IsString()
+  pais?: string;
+
+  @IsOptional()
+  @IsString()
   cuit?: string;
 
   @IsOptional()

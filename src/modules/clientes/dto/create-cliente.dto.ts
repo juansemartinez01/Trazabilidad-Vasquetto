@@ -5,9 +5,17 @@ export class CreateClienteDto {
   @MaxLength(200)
   razonSocial: string;
 
+  // ✅ ID fiscal genérico
   @IsOptional()
   @IsString()
+  @MaxLength(60)
   cuit?: string;
+
+  // ✅ NUEVO
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  pais?: string;
 
   @IsOptional()
   @IsString()

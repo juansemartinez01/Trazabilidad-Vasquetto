@@ -8,8 +8,13 @@ export class Cliente extends TenantBaseEntity {
   @Column({ length: 200 })
   razonSocial: string;
 
-  @Column({ length: 20, nullable: true })
+  // ✅ ahora es "ID fiscal" genérico (puede tener letras)
+  @Column({ length: 60, nullable: true })
   cuit?: string;
+
+  // ✅ NUEVO
+  @Column({ length: 80, nullable: true })
+  pais?: string;
 
   @Column({ length: 150, nullable: true })
   direccion?: string;

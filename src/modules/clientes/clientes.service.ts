@@ -61,13 +61,15 @@ export class ClientesService {
     if (dto.search) {
       qb.andWhere(
         `
-        (c.razonSocial ILIKE :s OR
-         c.cuit ILIKE :s OR 
-         c.localidad ILIKE :s)
-      `,
+    (c.razonSocial ILIKE :s OR
+     c.cuit ILIKE :s OR 
+     c.localidad ILIKE :s OR
+     c.pais ILIKE :s)
+    `,
         { s: `%${dto.search}%` },
       );
     }
+    if (dto.pais) qb.andWhere('c.pais ILIKE :pais', { pais: `%${dto.pais}%` });
 
     if (dto.cuit) qb.andWhere('c.cuit = :cuit', { cuit: dto.cuit });
 

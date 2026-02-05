@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { EstadisticasService } from './estadisticas.service';
 import { QueryEstadisticasProduccionDto } from './dto/query-estadisticas-produccion.dto';
+import { QueryTortaProduccionDto } from './dto/query-torta-produccion.dto';
 
 @Controller('estadisticas')
 export class EstadisticasController {
@@ -29,5 +30,11 @@ export class EstadisticasController {
   produccion(@Req() req, @Query() q: QueryEstadisticasProduccionDto) {
     const tenantId = this.getTenantId(req);
     return this.service.produccion(tenantId, q);
+  }
+
+  @Get('produccion/torta')
+  tortaProduccion(@Req() req, @Query() q: QueryTortaProduccionDto) {
+    const tenantId = this.getTenantId(req);
+    return this.service.tortaProduccion(tenantId, q);
   }
 }

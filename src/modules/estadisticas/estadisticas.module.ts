@@ -6,6 +6,7 @@ import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity'
 import { Cliente } from '../clientes/entities/cliente.entity';
 import { EntregaItem } from '../entregas/entities/entrega-item.entity';
 import { Entrega } from '../entregas/entities/entrega.entity';
+import { Recepcion } from '../recepciones/entities/recepcion.entity';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { Entrega } from '../entregas/entities/entrega.entity';
       Entrega,
       EntregaItem,
       Cliente,
+      Recepcion,
     ]),
   ],
   controllers: [EstadisticasController],

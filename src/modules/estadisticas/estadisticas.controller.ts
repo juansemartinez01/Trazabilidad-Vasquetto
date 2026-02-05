@@ -9,6 +9,7 @@ import { EstadisticasService } from './estadisticas.service';
 import { QueryEstadisticasProduccionDto } from './dto/query-estadisticas-produccion.dto';
 import { QueryTortaProduccionDto } from './dto/query-torta-produccion.dto';
 import { QueryEstadisticasClientesDto } from './dto/query-estadisticas-clientes.dto';
+import { QueryEstadisticasProveedoresDto } from './dto/query-estadisticas-proveedores.dto';
 
 @Controller('estadisticas')
 export class EstadisticasController {
@@ -39,12 +40,15 @@ export class EstadisticasController {
     return this.service.tortaProduccion(tenantId, q);
   }
 
+  @Get('clientes')
+  clientes(@Req() req, @Query() q: QueryEstadisticasClientesDto) {
+    const tenantId = this.getTenantId(req);
+    return this.service.clientes(tenantId, q);
+  }
 
-
-@Get('clientes')
-clientes(@Req() req, @Query() q: QueryEstadisticasClientesDto) {
-  const tenantId = this.getTenantId(req);
-  return this.service.clientes(tenantId, q);
-}
-
+  @Get('proveedores')
+  proveedores(@Req() req, @Query() q: QueryEstadisticasProveedoresDto) {
+    const tenantId = this.getTenantId(req);
+    return this.service.proveedores(tenantId, q);
+  }
 }

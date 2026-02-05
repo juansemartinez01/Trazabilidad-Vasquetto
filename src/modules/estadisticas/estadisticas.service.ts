@@ -6,6 +6,8 @@ import { QueryEstadisticasProduccionDto } from './dto/query-estadisticas-producc
 import { QueryTortaProduccionDto } from './dto/query-torta-produccion.dto';
 import { Entrega } from '../entregas/entities/entrega.entity';
 import { QueryEstadisticasClientesDto } from './dto/query-estadisticas-clientes.dto';
+import { Recepcion } from '../recepciones/entities/recepcion.entity';
+import { QueryEstadisticasProveedoresDto } from './dto/query-estadisticas-proveedores.dto';
 
 
 type TortaProduccionItem = {
@@ -22,6 +24,14 @@ type SerieClienteRow = {
   cantidadKg: number;
 };
 
+type SerieProveedorRow = {
+  periodo: string; // ISO
+  proveedorId: string | null;
+  proveedorNombre: string;
+  cantidadKg: number; // kg ingresados
+  recepciones: number; // cantidad de recepciones
+};
+
 
 @Injectable()
 export class EstadisticasService {
@@ -30,6 +40,8 @@ export class EstadisticasService {
     private readonly lotePfRepo: Repository<LoteProductoFinal>,
     @InjectRepository(Entrega)
     private readonly entregaRepo: Repository<Entrega>,
+    @InjectRepository(Recepcion)
+    private readonly recepcionRepo: Repository<Recepcion>,
   ) {}
 
   async produccion(tenantId: string, q: QueryEstadisticasProduccionDto) {
@@ -280,8 +292,6 @@ export class EstadisticasService {
       cantidadKg: Number(r.cantidadKg ?? 0),
     }));
 
-
-
     // ----------------------------
     // 3) Si no hay topIds (porque vino clienteId), devolvemos directo
     // ----------------------------
@@ -358,6 +368,173 @@ export class EstadisticasService {
           ? a.clienteNombre.localeCompare(b.clienteNombre)
           : a.periodo.localeCompare(b.periodo),
       ),
+    };
+  }
+
+  async proveedores(tenantId: string, q: QueryEstadisticasProveedoresDto) {
+    const periodo = q.periodo ?? 'month';
+    if (periodo !== 'month' && periodo !== 'year') {
+      throw new BadRequestException('periodo inválido');
+    }
+
+    const incluirOtros = (q.incluirOtros ?? 'true') === 'true';
+    const top = q.top ?? 10;
+
+    // ----------------------------
+    // 1) Top proveedores por KG (si no viene proveedorId)
+    // ----------------------------
+    let topIds: string[] | null = null;
+
+    if (!q.proveedorId) {
+      const topQb = this.recepcionRepo
+        .createQueryBuilder('r')
+        .leftJoin('r.proveedor', 'p')
+        .leftJoin('r.lotes', 'l') // LoteMP
+        .where('r.tenantId = :tenantId', { tenantId });
+
+      if (q.desde)
+        topQb.andWhere('r.fechaRemito >= :desde', { desde: q.desde });
+      if (q.hasta)
+        topQb.andWhere('r.fechaRemito <= :hasta', { hasta: q.hasta });
+
+      topQb
+        .select([
+          'p.id AS "proveedorId"',
+          'SUM(l.cantidadInicialKg) AS "cantidadKg"',
+        ])
+        .groupBy('p.id')
+        .orderBy('"cantidadKg"', 'DESC')
+        .limit(top);
+
+      const topRows = await topQb.getRawMany<{
+        proveedorId: string;
+        cantidadKg: string;
+      }>();
+      topIds = topRows.map((r) => r.proveedorId).filter(Boolean);
+    }
+
+    // ----------------------------
+    // 2) Query principal por periodo + proveedor
+    // ----------------------------
+    const bucketExpr = `DATE_TRUNC('${periodo}', r.fechaRemito)`;
+
+    const qb = this.recepcionRepo
+      .createQueryBuilder('r')
+      .leftJoin('r.proveedor', 'p')
+      .leftJoin('r.lotes', 'l')
+      .where('r.tenantId = :tenantId', { tenantId });
+
+    if (q.desde) qb.andWhere('r.fechaRemito >= :desde', { desde: q.desde });
+    if (q.hasta) qb.andWhere('r.fechaRemito <= :hasta', { hasta: q.hasta });
+
+    if (q.proveedorId) {
+      qb.andWhere('p.id = :pid', { pid: q.proveedorId });
+    } else if (topIds && topIds.length > 0 && !incluirOtros) {
+      qb.andWhere('p.id IN (:...topIds)', { topIds });
+    }
+
+    qb.select([
+      `${bucketExpr} AS "periodo"`,
+      `p.id AS "proveedorId"`,
+      `p.nombre AS "proveedorNombre"`, // 👈 si es razonSocial, cambiá acá
+      `COALESCE(SUM(l.cantidadInicialKg), 0) AS "cantidadKg"`,
+      `COUNT(DISTINCT r.id) AS "recepciones"`,
+    ])
+      .groupBy('"periodo"')
+      .addGroupBy('p.id')
+      .addGroupBy('p.nombre')
+      .orderBy('"periodo"', 'ASC')
+      .addOrderBy('p.nombre', 'ASC');
+
+    const rows = await qb.getRawMany<{
+      periodo: any;
+      proveedorId: string;
+      proveedorNombre: string;
+      cantidadKg: string;
+      recepciones: string;
+    }>();
+
+    const normalized: SerieProveedorRow[] = rows.map((r) => ({
+      periodo: new Date(r.periodo as any).toISOString(),
+      proveedorId: r.proveedorId,
+      proveedorNombre: r.proveedorNombre,
+      cantidadKg: Number(r.cantidadKg ?? 0),
+      recepciones: Number(r.recepciones ?? 0),
+    }));
+
+    // ----------------------------
+    // 3) Si vino proveedorId → devolvemos directo
+    // ----------------------------
+    if (q.proveedorId) {
+      return {
+        periodo,
+        desde: q.desde ?? null,
+        hasta: q.hasta ?? null,
+        top: null,
+        incluirOtros: false,
+        items: normalized,
+      };
+    }
+
+    // ----------------------------
+    // 4) Top + OTROS (por periodo)
+    // ----------------------------
+    if (!topIds || topIds.length === 0) {
+      return {
+        periodo,
+        desde: q.desde ?? null,
+        hasta: q.hasta ?? null,
+        top,
+        incluirOtros,
+        items: [],
+      };
+    }
+
+    if (!incluirOtros) {
+      return {
+        periodo,
+        desde: q.desde ?? null,
+        hasta: q.hasta ?? null,
+        top,
+        incluirOtros: false,
+        items: normalized,
+      };
+    }
+
+    const topSet = new Set(topIds);
+    const topRows = normalized.filter((r) => topSet.has(r.proveedorId ?? ''));
+    const restRows = normalized.filter((r) => !topSet.has(r.proveedorId ?? ''));
+
+    const otrosByPeriodo = new Map<string, { kg: number; rec: number }>();
+    for (const r of restRows) {
+      const cur = otrosByPeriodo.get(r.periodo) ?? { kg: 0, rec: 0 };
+      cur.kg += r.cantidadKg;
+      cur.rec += r.recepciones;
+      otrosByPeriodo.set(r.periodo, cur);
+    }
+
+    const otrosRows: SerieProveedorRow[] = Array.from(otrosByPeriodo.entries())
+      .filter(([, v]) => v.kg > 0 || v.rec > 0)
+      .map(([periodoIso, v]) => ({
+        periodo: periodoIso,
+        proveedorId: null,
+        proveedorNombre: 'OTROS',
+        cantidadKg: Number(v.kg.toFixed(6)),
+        recepciones: v.rec,
+      }));
+
+    return {
+      periodo,
+      desde: q.desde ?? null,
+      hasta: q.hasta ?? null,
+      top,
+      incluirOtros: true,
+      items: [...topRows, ...otrosRows].sort((a, b) => {
+        const ta = new Date(a.periodo).getTime();
+        const tb = new Date(b.periodo).getTime();
+        if (ta !== tb) return ta - tb;
+        return a.proveedorNombre.localeCompare(b.proveedorNombre);
+      }),
     };
   }
 }

@@ -8,6 +8,7 @@ import {
 import { EstadisticasService } from './estadisticas.service';
 import { QueryEstadisticasProduccionDto } from './dto/query-estadisticas-produccion.dto';
 import { QueryTortaProduccionDto } from './dto/query-torta-produccion.dto';
+import { QueryEstadisticasClientesDto } from './dto/query-estadisticas-clientes.dto';
 
 @Controller('estadisticas')
 export class EstadisticasController {
@@ -37,4 +38,13 @@ export class EstadisticasController {
     const tenantId = this.getTenantId(req);
     return this.service.tortaProduccion(tenantId, q);
   }
+
+
+
+@Get('clientes')
+clientes(@Req() req, @Query() q: QueryEstadisticasClientesDto) {
+  const tenantId = this.getTenantId(req);
+  return this.service.clientes(tenantId, q);
+}
+
 }

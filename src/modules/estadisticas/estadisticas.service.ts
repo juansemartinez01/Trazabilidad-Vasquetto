@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { LoteProductoFinal } from '../lotes/entities/lote-producto-final.entity';
 import { QueryEstadisticasProduccionDto } from './dto/query-estadisticas-produccion.dto';
 import { QueryTortaProduccionDto } from './dto/query-torta-produccion.dto';
+import { Entrega } from '../entregas/entities/entrega.entity';
+import { QueryEstadisticasClientesDto } from './dto/query-estadisticas-clientes.dto';
 
 
 type TortaProduccionItem = {
@@ -13,6 +15,12 @@ type TortaProduccionItem = {
   porcentaje: number;
 };
 
+type SerieClienteRow = {
+  periodo: string;
+  clienteId: string | null;
+  clienteNombre: string;
+  cantidadKg: number;
+};
 
 
 @Injectable()
@@ -20,6 +28,8 @@ export class EstadisticasService {
   constructor(
     @InjectRepository(LoteProductoFinal)
     private readonly lotePfRepo: Repository<LoteProductoFinal>,
+    @InjectRepository(Entrega)
+    private readonly entregaRepo: Repository<Entrega>,
   ) {}
 
   async produccion(tenantId: string, q: QueryEstadisticasProduccionDto) {
@@ -155,7 +165,6 @@ export class EstadisticasService {
       };
     });
 
-
     if (incluirOtros && restRows.length > 0) {
       const kgOtros = restRows.reduce(
         (acc, r) => acc + Number(r.cantidadKg ?? 0),
@@ -178,6 +187,175 @@ export class EstadisticasService {
     return {
       totalKg: Number(totalGeneral.toFixed(6)),
       items: itemsTop,
+    };
+  }
+
+  async clientes(tenantId: string, q: QueryEstadisticasClientesDto) {
+    const periodo = q.periodo ?? 'month';
+    const trunc = periodo; // 'month'|'year'
+
+    if (trunc !== 'month' && trunc !== 'year') {
+      throw new BadRequestException('periodo inválido');
+    }
+
+    const incluirOtros = (q.incluirOtros ?? 'true') === 'true';
+    const top = q.top ?? 10;
+
+    // ----------------------------
+    // 1) Determinar "top clientes" (si NO viene clienteId)
+    // ----------------------------
+    let topIds: string[] | null = null;
+
+    if (!q.clienteId) {
+      const topQb = this.entregaRepo
+        .createQueryBuilder('e')
+        .leftJoin('e.cliente', 'c')
+        .leftJoin('e.items', 'it') // <- asumo relación Entrega.items -> EntregaItem
+        .where('e.tenantId = :tenantId', { tenantId });
+
+      if (q.desde) topQb.andWhere('e.fecha >= :desde', { desde: q.desde });
+      if (q.hasta) topQb.andWhere('e.fecha <= :hasta', { hasta: q.hasta });
+
+      topQb
+        .select(['c.id AS "clienteId"', 'SUM(it.cantidadKg) AS "cantidadKg"'])
+        .groupBy('c.id')
+        .orderBy('"cantidadKg"', 'DESC')
+        .limit(top);
+
+      const topRows = await topQb.getRawMany<{
+        clienteId: string;
+        cantidadKg: string;
+      }>();
+      topIds = topRows.map((r) => r.clienteId).filter(Boolean);
+    }
+
+    // ----------------------------
+    // 2) Query principal por periodo + cliente
+    // ----------------------------
+    const bucketExpr = `DATE_TRUNC('${trunc}', e.fecha)`;
+
+    const qb = this.entregaRepo
+      .createQueryBuilder('e')
+      .leftJoin('e.cliente', 'c')
+      .leftJoin('e.items', 'it')
+      .where('e.tenantId = :tenantId', { tenantId });
+
+    if (q.desde) qb.andWhere('e.fecha >= :desde', { desde: q.desde });
+    if (q.hasta) qb.andWhere('e.fecha <= :hasta', { hasta: q.hasta });
+
+    // Si viene clienteId, filtramos directo
+    if (q.clienteId) {
+      qb.andWhere('c.id = :cid', { cid: q.clienteId });
+    } else if (topIds && topIds.length > 0 && incluirOtros) {
+      // Traemos top + no-top para poder calcular OTROS
+      // (no filtramos acá, filtramos luego en JS separando)
+    } else if (topIds && topIds.length > 0 && !incluirOtros) {
+      // Solo top
+      qb.andWhere('c.id IN (:...topIds)', { topIds });
+    }
+
+    qb.select([
+      `${bucketExpr} AS "periodo"`,
+      `c.id AS "clienteId"`,
+      `c.razonSocial AS "clienteNombre"`, // ajustá si tu cliente tiene otro campo
+      `SUM(it.cantidadKg) AS "cantidadKg"`,
+    ])
+      .groupBy('"periodo"')
+      .addGroupBy('c.id')
+      .addGroupBy('c.razonSocial')
+      .orderBy('"periodo"', 'ASC')
+      .addOrderBy('c.razonSocial', 'ASC');
+
+    const rows = await qb.getRawMany<{
+      periodo: string;
+      clienteId: string;
+      clienteNombre: string;
+      cantidadKg: string;
+    }>();
+
+    const normalized: SerieClienteRow[] = rows.map((r) => ({
+      periodo: r.periodo,
+      clienteId: r.clienteId,
+      clienteNombre: r.clienteNombre,
+      cantidadKg: Number(r.cantidadKg ?? 0),
+    }));
+
+    // ----------------------------
+    // 3) Si no hay topIds (porque vino clienteId), devolvemos directo
+    // ----------------------------
+    if (q.clienteId) {
+      return {
+        periodo: trunc,
+        desde: q.desde ?? null,
+        hasta: q.hasta ?? null,
+        top: null,
+        incluirOtros: false,
+        items: normalized,
+      };
+    }
+
+    // ----------------------------
+    // 4) Top + OTROS (si corresponde)
+    // ----------------------------
+    if (!topIds || topIds.length === 0) {
+      return {
+        periodo: trunc,
+        desde: q.desde ?? null,
+        hasta: q.hasta ?? null,
+        top,
+        incluirOtros,
+        items: [],
+      };
+    }
+
+    if (!incluirOtros) {
+      // ya filtramos en SQL, devolvemos tal cual
+      return {
+        periodo: trunc,
+        desde: q.desde ?? null,
+        hasta: q.hasta ?? null,
+        top,
+        incluirOtros: false,
+        items: normalized,
+      };
+    }
+
+    // incluirOtros=true:
+    // separo top vs resto y genero fila "OTROS" por periodo
+    const topSet = new Set(topIds);
+
+    const topRows = normalized.filter((r) => topSet.has(r.clienteId ?? ''));
+    const restRows = normalized.filter((r) => !topSet.has(r.clienteId ?? ''));
+
+    // Agrupar "resto" por periodo
+    const otrosByPeriodo = new Map<string, number>();
+    for (const r of restRows) {
+      otrosByPeriodo.set(
+        r.periodo,
+        (otrosByPeriodo.get(r.periodo) ?? 0) + r.cantidadKg,
+      );
+    }
+
+    const otrosRows: SerieClienteRow[] = Array.from(otrosByPeriodo.entries())
+      .filter(([, kg]) => kg > 0)
+      .map(([periodoStr, kg]) => ({
+        periodo: periodoStr,
+        clienteId: null,
+        clienteNombre: 'OTROS',
+        cantidadKg: Number(kg.toFixed(6)),
+      }));
+
+    return {
+      periodo: trunc,
+      desde: q.desde ?? null,
+      hasta: q.hasta ?? null,
+      top,
+      incluirOtros: true,
+      items: [...topRows, ...otrosRows].sort((a, b) =>
+        a.periodo === b.periodo
+          ? a.clienteNombre.localeCompare(b.clienteNombre)
+          : a.periodo.localeCompare(b.periodo),
+      ),
     };
   }
 }

@@ -133,6 +133,7 @@ export class InsumoService {
       motivo: dto.motivo,
       referenciaId: dto.referenciaId,
       responsableId: dto.responsableId,
+      documentos: dto.documentos,
     });
   }
 
@@ -147,6 +148,7 @@ export class InsumoService {
       motivo: dto.motivo,
       referenciaId: dto.referenciaId,
       responsableId: dto.responsableId,
+      documentos: dto.documentos,
     });
   }
 
@@ -161,6 +163,7 @@ export class InsumoService {
       motivo: dto.motivo ?? 'MERMA',
       referenciaId: dto.referenciaId,
       responsableId: dto.responsableId,
+      documentos: dto.documentos,
     });
   }
 
@@ -178,6 +181,7 @@ export class InsumoService {
       motivo: dto.motivo,
       referenciaId: dto.referenciaId,
       responsableId: dto.responsableId,
+      documentos: dto.documentos,
     });
   }
 
@@ -190,6 +194,7 @@ export class InsumoService {
       motivo?: string;
       referenciaId?: string;
       responsableId?: string;
+      documentos?: any;
     },
   ) {
     return this.ds.transaction(async (manager) => {
@@ -222,6 +227,7 @@ export class InsumoService {
         motivo: data.motivo,
         referenciaId: data.referenciaId,
         responsableId: data.responsableId,
+        documentos: data.documentos,
       });
 
       await manager.getRepository(InsumoMovimiento).save(mov);

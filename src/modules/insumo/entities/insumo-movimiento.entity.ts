@@ -40,4 +40,8 @@ export class InsumoMovimiento extends TenantBaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   responsableId?: string;
+
+  // ✅ NUEVO: adjuntos (remitos, fotos, comprobantes, etc.)
+  @Column({ type: 'jsonb', nullable: true })
+  documentos?: any;
 }

@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsNumber, IsObject, IsOptional, IsString, Min } from 'class-validator';
 
 export class MovimientoStockDto {
   @IsNumber()
@@ -16,6 +16,11 @@ export class MovimientoStockDto {
   @IsOptional()
   @IsString()
   responsableId?: string;
+
+  // ✅ NUEVO: adjuntos
+  @IsOptional()
+  @IsObject()
+  documentos?: any;
 }
 
 // Ajuste permite + o -
@@ -33,4 +38,9 @@ export class AjusteStockDto {
   @IsOptional()
   @IsString()
   responsableId?: string;
+
+  // ✅ NUEVO: adjuntos
+  @IsOptional()
+  @IsObject()
+  documentos?: any;
 }

@@ -16,7 +16,7 @@ type TortaProduccionItem = {
 };
 
 type SerieClienteRow = {
-  periodo: string;
+  periodo: string; // siempre ISO string
   clienteId: string | null;
   clienteNombre: string;
   cantidadKg: number;
@@ -274,11 +274,13 @@ export class EstadisticasService {
     }>();
 
     const normalized: SerieClienteRow[] = rows.map((r) => ({
-      periodo: r.periodo,
+      periodo: new Date(r.periodo as any).toISOString(),
       clienteId: r.clienteId,
       clienteNombre: r.clienteNombre,
       cantidadKg: Number(r.cantidadKg ?? 0),
     }));
+
+
 
     // ----------------------------
     // 3) Si no hay topIds (porque vino clienteId), devolvemos directo

@@ -13,6 +13,7 @@ import { PresentacionProductoFinal } from '../producto-final/entities/presentaci
 import { CreateInsumoConsumoPfDto } from './dto/create-insumo-consumo-pf.dto';
 import { UpdateInsumoConsumoPfDto } from './dto/update-insumo-consumo-pf.dto';
 import { CalcularConsumoInsumosDto } from './dto/calcular-consumo-insumos.dto';
+import { QueryInsumoConsumoPfDto } from './dto/query-insumo-consumo-pf.dto';
 
 @Injectable()
 export class InsumoConsumoPfService {
@@ -321,5 +322,80 @@ export class InsumoConsumoPfService {
         };
       })
       .sort((a, b) => b.faltante - a.faltante);
+  }
+
+  async listarPaginado(tenantId: string, query: QueryInsumoConsumoPfDto) {
+    const page = Number(query.page ?? 1);
+    const limit = Math.min(200, Math.max(1, Number(query.limit ?? 50)));
+    const skip = (page - 1) * limit;
+
+    const qb = this.repo
+      .createQueryBuilder('r')
+      .leftJoin('r.insumo', 'i')
+      .leftJoin('r.productoFinal', 'pf')
+      .leftJoin('r.presentacion', 'pres')
+      .where('r.tenantId = :tenantId', { tenantId });
+
+    // filtros exactos
+    if (query.productoFinalId)
+      qb.andWhere('r.productoFinalId = :pfId', { pfId: query.productoFinalId });
+    if (query.presentacionId)
+      qb.andWhere('r.presentacionId = :presId', {
+        presId: query.presentacionId,
+      });
+    if (query.insumoId)
+      qb.andWhere('r.insumoId = :insId', { insId: query.insumoId });
+
+    // flags
+    if (query.activo !== undefined)
+      qb.andWhere('r.activo = :activo', { activo: query.activo });
+    if (query.esEnvase !== undefined)
+      qb.andWhere('r.esEnvase = :esEnvase', { esEnvase: query.esEnvase });
+
+    // búsqueda
+    const q = query.q?.trim();
+    if (q) {
+      qb.andWhere(
+        `(i.nombre ILIKE :q OR pf.nombre ILIKE :q OR pres.nombre ILIKE :q)`,
+        { q: `%${q}%` },
+      );
+    }
+
+    // select liviano (evita hidratar entidades completas)
+    qb.select([
+      'r.id',
+      'r.createdAt',
+      'r.insumoId',
+      'r.productoFinalId',
+      'r.presentacionId',
+      'r.cantidadPorUnidad',
+      'r.cantidadPorKg',
+      'r.activo',
+      'r.esEnvase',
+
+      'i.id',
+      'i.nombre',
+      'i.unidad',
+      'i.esEnvase',
+
+      'pf.id',
+      'pf.nombre',
+
+      'pres.id',
+      'pres.nombre',
+    ]);
+
+    const order = (query.order ?? 'DESC') === 'ASC' ? 'ASC' : 'DESC';
+    qb.orderBy('r.createdAt', order);
+
+    const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    return {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      items,
+    };
   }
 }

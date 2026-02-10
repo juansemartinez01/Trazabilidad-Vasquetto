@@ -17,6 +17,7 @@ import { InsumoConsumoPfService } from './insumo-consumo-pf.service';
 import { CreateInsumoConsumoPfDto } from './dto/create-insumo-consumo-pf.dto';
 import { UpdateInsumoConsumoPfDto } from './dto/update-insumo-consumo-pf.dto';
 import { CalcularConsumoInsumosDto } from './dto/calcular-consumo-insumos.dto';
+import { QueryInsumoConsumoPfDto } from './dto/query-insumo-consumo-pf.dto';
 
 @Controller('insumos/consumos-pf')
 @UseGuards(AuthGuard)
@@ -33,6 +34,11 @@ export class InsumoConsumoPfController {
       productoFinalId,
       presentacionId,
     });
+  }
+
+  @Get('paginado')
+  listarPaginado(@Req() req, @Query() query: QueryInsumoConsumoPfDto) {
+    return this.service.listarPaginado(req.tenantId, query);
   }
 
   @Get(':id')

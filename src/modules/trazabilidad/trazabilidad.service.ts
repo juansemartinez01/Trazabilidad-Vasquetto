@@ -96,6 +96,8 @@ export class TrazabilidadService {
         'pf.id as pf_id',
         'pf.codigoLote as pf_codigo',
         'pf.estado as pf_estado',
+        'pf.cantidadInicialKg as pf_kg_inicial',
+        'pf.cantidadActualKg as pf_kg_actual',
         'pfProd.nombre as pf_nombre',
       ])
       .getRawMany<{
@@ -105,6 +107,8 @@ export class TrazabilidadService {
         pf_id: string | null;
         pf_codigo: string | null;
         pf_estado: string | null;
+        pf_kg_inicial: string | null;
+        pf_kg_actual: string | null;
         pf_nombre: string | null;
       }>();
 
@@ -170,6 +174,7 @@ export class TrazabilidadService {
       meta: {
         fechaElaboracion: mp.fechaElaboracion,
         fechaVencimiento: mp.fechaVencimiento,
+        kgInicial: Number(mp.cantidadInicialKg ?? 0),
         kgActual: Number(mp.cantidadActualKg),
         recepcionId: mp.recepcion?.id,
         proveedor: mp.recepcion?.proveedor
@@ -200,7 +205,11 @@ export class TrazabilidadService {
         titulo: r.pf_nombre ?? 'Producto final',
         subtitulo: r.pf_codigo ? `LOT: ${r.pf_codigo}` : undefined,
         badge: r.pf_estado ?? undefined,
-        meta: { ordenId: r.orden_id },
+        meta: {
+          ordenId: r.orden_id,
+          kgInicial: Number(r.pf_kg_inicial ?? 0),
+          kgActual: Number(r.pf_kg_actual ?? 0),
+        },
         col: 'PROD',
       });
     }
@@ -288,6 +297,8 @@ export class TrazabilidadService {
         'pf.id as pf_id',
         'pf.codigoLote as pf_codigo',
         'pf.estado as pf_estado',
+        'pf.cantidadInicialKg as pf_kg_inicial',
+        'pf.cantidadActualKg as pf_kg_actual',
         'pfProd.nombre as pf_nombre',
         'it.cantidadKg as cantidad_kg',
         'it.cantidadBultos as cantidad_bultos',
@@ -305,6 +316,8 @@ export class TrazabilidadService {
         pf_id: string;
         pf_codigo: string;
         pf_estado: string;
+        pf_kg_inicial: string | null;
+        pf_kg_actual: string | null;
         pf_nombre: string | null;
         cantidad_kg: string | null;
         cantidad_bultos: string | null;
@@ -337,6 +350,8 @@ export class TrazabilidadService {
         'mp.id as mp_id',
         'mp.codigoLote as mp_codigo',
         'mpMat.nombre as mp_nombre',
+        'mp.cantidadInicialKg as mp_kg_inicial',
+        'mp.cantidadActualKg as mp_kg_actual',
         'c.cantidadKg as consumo_kg',
       ])
       .getRawMany<{
@@ -345,6 +360,8 @@ export class TrazabilidadService {
         mp_id: string;
         mp_codigo: string;
         mp_nombre: string | null;
+        mp_kg_inicial: string | null;
+        mp_kg_actual: string | null;
         consumo_kg: string;
       }>();
 
@@ -398,6 +415,8 @@ export class TrazabilidadService {
           presentacion: it.pres_id
             ? { id: it.pres_id, codigo: it.pres_codigo, nombre: it.pres_nombre }
             : null,
+          kgInicial: Number(it.pf_kg_inicial ?? 0),
+          kgActual: Number(it.pf_kg_actual ?? 0),
         },
         col: 'PROD',
       });
@@ -431,6 +450,10 @@ export class TrazabilidadService {
         refId: c.mp_id,
         titulo: c.mp_nombre ?? 'Materia prima',
         subtitulo: `LOT: ${c.mp_codigo}`,
+        meta: {
+          kgInicial: Number(c.mp_kg_inicial ?? 0),
+          kgActual: Number(c.mp_kg_actual ?? 0),
+        },
         col: 'BACKWARD',
       };
       upsertNodo(mpNode);
@@ -490,6 +513,8 @@ export class TrazabilidadService {
         'mp.id as mp_id',
         'mp.codigoLote as mp_codigo',
         'mpMat.nombre as mp_nombre',
+        'mp.cantidadInicialKg as mp_kg_inicial',
+        'mp.cantidadActualKg as mp_kg_actual',
         'c.cantidadKg as consumo_kg',
       ])
       .getRawMany<{
@@ -497,6 +522,8 @@ export class TrazabilidadService {
         mp_id: string;
         mp_codigo: string;
         mp_nombre: string | null;
+        mp_kg_inicial: string | null;
+        mp_kg_actual: string | null;
         consumo_kg: string;
       }>();
 
@@ -556,6 +583,7 @@ export class TrazabilidadService {
         deposito: pf.deposito?.nombre,
         fechaProduccion: pf.fechaProduccion,
         fechaVencimiento: pf.fechaVencimiento,
+        kgInicial: Number(pf.cantidadInicialKg ?? 0),
         kgActual: Number(pf.cantidadActualKg),
       },
       col: 'PROD',
@@ -573,6 +601,10 @@ export class TrazabilidadService {
         refId: c.mp_id,
         titulo: c.mp_nombre ?? 'Materia prima',
         subtitulo: `LOT: ${c.mp_codigo}`,
+        meta: {
+          kgInicial: Number(c.mp_kg_inicial ?? 0),
+          kgActual: Number(c.mp_kg_actual ?? 0),
+        },
         col: 'BACKWARD',
       });
 

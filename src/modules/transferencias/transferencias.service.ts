@@ -40,6 +40,11 @@ function dec(n: any) {
   return v;
 }
 
+function isPgUniqueViolation(e: any) {
+  // Postgres unique_violation
+  return e?.code === '23505';
+}
+
 @Injectable()
 export class TransferenciasService {
   constructor(
@@ -66,6 +71,9 @@ export class TransferenciasService {
     private movRepo: Repository<StockMovimiento>,
   ) {}
 
+  // =========================
+  // Crear
+  // =========================
   async crear(
     tenantId: string,
     usuarioId: string | null,
@@ -89,7 +97,46 @@ export class TransferenciasService {
     });
     if (!destino) throw new NotFoundException('Depósito destino no encontrado');
 
-    
+    // Validación por tipo + anti-combinaciones inválidas
+    for (const it of dto.items) {
+      if (dto.tipo === TransferenciaTipo.MP) {
+        if (!it.loteMpId) throw new BadRequestException('MP requiere loteMpId');
+        if (it.lotePfId || it.presentacionId)
+          throw new BadRequestException(
+            'Item MP no puede incluir lotePfId/presentacionId',
+          );
+        const kg = dec(it.cantidadKg);
+        if (kg <= 0)
+          throw new BadRequestException('MP requiere cantidadKg > 0');
+      }
+
+      if (dto.tipo === TransferenciaTipo.PF_GRANEL) {
+        if (!it.lotePfId)
+          throw new BadRequestException('PF_GRANEL requiere lotePfId');
+        if (it.loteMpId || it.presentacionId)
+          throw new BadRequestException(
+            'Item PF_GRANEL no puede incluir loteMpId/presentacionId',
+          );
+        const kg = dec(it.cantidadKg);
+        if (kg <= 0)
+          throw new BadRequestException('PF_GRANEL requiere cantidadKg > 0');
+      }
+
+      if (dto.tipo === TransferenciaTipo.PF_ENVASADO) {
+        if (!it.presentacionId)
+          throw new BadRequestException('PF_ENVASADO requiere presentacionId');
+        if (it.loteMpId || it.lotePfId)
+          throw new BadRequestException(
+            'Item PF_ENVASADO no puede incluir loteMpId/lotePfId',
+          );
+        const cant = Number(it.cantidadUnidades ?? 0);
+        if (!Number.isFinite(cant) || cant <= 0) {
+          throw new BadRequestException(
+            'PF_ENVASADO requiere cantidadUnidades > 0',
+          );
+        }
+      }
+    }
 
     const t = this.repo.create({
       tenantId,
@@ -108,8 +155,9 @@ export class TransferenciasService {
 
     const saved = await this.repo.save(t);
 
-    for (const it of dto.items) {
-      const item = this.itemRepo.create({
+    // Batch save (más eficiente)
+    const items = dto.items.map((it) =>
+      this.itemRepo.create({
         tenantId,
         transferencia: saved,
         descripcion: it.descripcion ?? null,
@@ -120,13 +168,17 @@ export class TransferenciasService {
         presentacion: it.presentacionId
           ? ({ id: it.presentacionId } as any)
           : null,
-      });
-      await this.itemRepo.save(item);
-    }
+      }),
+    );
+
+    await this.itemRepo.save(items);
 
     return this.obtener(tenantId, saved.id);
   }
 
+  // =========================
+  // Obtener / Listar
+  // =========================
   obtener(tenantId: string, id: string) {
     return this.repo.findOne({
       where: { tenantId, id },
@@ -142,6 +194,9 @@ export class TransferenciasService {
     });
   }
 
+  // =========================
+  // Confirmar
+  // =========================
   async confirmar(tenantId: string, usuarioId: string | null, id: string) {
     return this.ds.transaction(async (trx) => {
       const repo = trx.getRepository(Transferencia);
@@ -187,20 +242,18 @@ export class TransferenciasService {
         throw new BadRequestException('La transferencia no tiene items');
 
       // =====================
-      // MP (split de lote)
+      // MP (move o split)
       // =====================
       if (t.tipo === TransferenciaTipo.MP) {
         for (const it of t.items) {
           const kg = dec(it.cantidadKg);
 
-          if (!it.loteMp?.id) {
+          if (!it.loteMp?.id)
             throw new BadRequestException('MP requiere loteMpId');
-          }
-          if (kg <= 0) {
+          if (kg <= 0)
             throw new BadRequestException('cantidadKg requerida para MP');
-          }
 
-          // 1) Lock del lote para asegurar stock / concurrencia
+          // lock lote
           const lote = await loteMpRepo.findOne({
             where: { tenantId, id: it.loteMp.id },
             lock: { mode: 'pessimistic_write' },
@@ -208,10 +261,11 @@ export class TransferenciasService {
           });
           if (!lote) throw new NotFoundException('Lote MP no encontrado');
 
-          // 2) Traer FKs necesarios (recepcion_id, materia_prima_id, deposito_id) SIN relations
+          // raw fks (deposito_id, recepcion_id, materia_prima_id)
           const raw = await loteMpRepo
             .createQueryBuilder('l')
             .select([
+              'l.codigo_lote AS codigo_lote',
               'l.deposito_id AS deposito_id',
               'l.recepcion_id AS recepcion_id',
               'l.materia_prima_id AS materia_prima_id',
@@ -219,6 +273,7 @@ export class TransferenciasService {
             .where('l.tenant_id = :tenantId', { tenantId })
             .andWhere('l.id = :id', { id: it.loteMp.id })
             .getRawOne<{
+              codigo_lote: string;
               deposito_id: string;
               recepcion_id: string;
               materia_prima_id: string;
@@ -226,222 +281,251 @@ export class TransferenciasService {
 
           if (!raw) throw new NotFoundException('Lote MP no encontrado');
 
-          // 3) Validar depósito origen por FK real
           if (raw.deposito_id !== origen.id) {
             throw new BadRequestException(
-              `El lote MP ${lote.codigoLote} no pertenece al depósito origen`,
+              `El lote MP ${raw.codigo_lote ?? lote.codigoLote} no pertenece al depósito origen`,
             );
           }
 
-          // 4) Validar stock
           const disp = dec(lote.cantidadActualKg);
           if (disp < kg) {
             throw new BadRequestException(
-              `Stock insuficiente en lote MP ${lote.codigoLote} (disp ${disp}, req ${kg})`,
+              `Stock insuficiente en lote MP ${raw.codigo_lote ?? lote.codigoLote} (disp ${disp}, req ${kg})`,
             );
           }
 
-          // 5) Descontar origen
-          lote.cantidadActualKg = disp - kg;
-          await loteMpRepo.save(lote);
+          const isMove = disp === kg;
 
-          // 6) Crear lote destino (split) seteando IDs (evita null en recepcion_id/materia_prima_id)
-          const codigoHijo = await this.generarCodigoSplitMP(
-            trx,
-            tenantId,
-            lote.codigoLote,
-          );
+          if (isMove) {
+            // MOVE: mismo lote cambia de depósito
+            (lote as any).deposito = { id: destino.id } as any;
+            await loteMpRepo.save(lote);
 
-          const nuevo = loteMpRepo.create({
-            tenantId,
-            recepcion: { id: raw.recepcion_id } as any,
-            materiaPrima: { id: raw.materia_prima_id } as any,
-            deposito: { id: destino.id } as any,
-            codigoLote: codigoHijo,
-            fechaElaboracion: lote.fechaElaboracion,
-            fechaAnalisis: lote.fechaAnalisis ?? null,
-            fechaVencimiento: lote.fechaVencimiento,
-            cantidadInicialKg: kg,
-            cantidadActualKg: kg,
-            analisis: lote.analisis ?? null,
-            documentos: lote.documentos ?? null,
-          });
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
+                loteMP: { id: lote.id } as any,
+                deposito: { id: origen.id } as any,
+                cantidadKg: -kg,
+                referenciaId: t.id,
+              }),
+            );
 
-          const loteDestino = await loteMpRepo.save(nuevo);
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
+                loteMP: { id: lote.id } as any,
+                deposito: { id: destino.id } as any,
+                cantidadKg: +kg,
+                referenciaId: t.id,
+              }),
+            );
 
-          // 7) Movimientos (salida + entrada)
-          await movRepo.save(
-            movRepo.create({
+            it.descripcion =
+              it.descripcion ??
+              `Move: ${raw.codigo_lote ?? lote.codigoLote} -> depósito destino`;
+            await itemRepo.save(it);
+          } else {
+            // SPLIT: descuenta y crea hijo
+            lote.cantidadActualKg = disp - kg;
+            await loteMpRepo.save(lote);
+
+            const loteDestino = await this.crearLoteMpSplitConRetry(
+              trx,
               tenantId,
-              tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
-              loteMP: { id: lote.id } as any,
-              deposito: { id: origen.id } as any,
-              cantidadKg: -kg,
-              referenciaId: t.id,
-            }),
-          );
+              raw.codigo_lote ?? lote.codigoLote,
+              {
+                recepcion_id: raw.recepcion_id,
+                materia_prima_id: raw.materia_prima_id,
+              },
+              destino.id,
+              lote,
+              kg,
+              t.id,
+            );
 
-          await movRepo.save(
-            movRepo.create({
-              tenantId,
-              tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
-              loteMP: { id: loteDestino.id } as any,
-              deposito: { id: destino.id } as any,
-              cantidadKg: +kg,
-              referenciaId: t.id,
-            }),
-          );
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
+                loteMP: { id: lote.id } as any,
+                deposito: { id: origen.id } as any,
+                cantidadKg: -kg,
+                referenciaId: t.id,
+              }),
+            );
 
-          it.descripcion =
-            it.descripcion ??
-            `Split: ${lote.codigoLote} -> ${loteDestino.codigoLote}`;
-          await itemRepo.save(it);
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_MP as any,
+                loteMP: { id: loteDestino.id } as any,
+                deposito: { id: destino.id } as any,
+                cantidadKg: +kg,
+                referenciaId: t.id,
+              }),
+            );
+
+            it.descripcion =
+              it.descripcion ??
+              `Split: ${raw.codigo_lote ?? lote.codigoLote} -> ${loteDestino.codigoLote}`;
+            await itemRepo.save(it);
+          }
         }
       }
 
       // =====================
-// PF granel (split de lote)
-// =====================
-if (t.tipo === TransferenciaTipo.PF_GRANEL) {
-  for (const it of t.items) {
-    const kg = dec(it.cantidadKg);
+      // PF granel (move o split)
+      // =====================
+      if (t.tipo === TransferenciaTipo.PF_GRANEL) {
+        for (const it of t.items) {
+          const kg = dec(it.cantidadKg);
 
-    if (!it.lotePf?.id) {
-      throw new BadRequestException('PF_GRANEL requiere lotePfId');
-    }
-    if (kg <= 0) {
-      throw new BadRequestException('cantidadKg requerida para PF_GRANEL');
-    }
+          if (!it.lotePf?.id)
+            throw new BadRequestException('PF_GRANEL requiere lotePfId');
+          if (kg <= 0)
+            throw new BadRequestException(
+              'cantidadKg requerida para PF_GRANEL',
+            );
 
-    // 1) LOCK del lote para concurrencia (SIN eager/relations)
-    const lote = await lotePfRepo.findOne({
-      where: { tenantId, id: it.lotePf.id },
-      lock: { mode: 'pessimistic_write' },
-      loadEagerRelations: false,
-    });
-    if (!lote) throw new NotFoundException('Lote PF no encontrado');
+          const lote = await lotePfRepo.findOne({
+            where: { tenantId, id: it.lotePf.id },
+            lock: { mode: 'pessimistic_write' },
+            loadEagerRelations: false,
+          });
+          if (!lote) throw new NotFoundException('Lote PF no encontrado');
 
-    // 2) Traer FKs y datos necesarios por RAW (sin depender de eager/relations)
-    const raw = await lotePfRepo
-      .createQueryBuilder('l')
-      .select([
-        'l.id AS id',
-        'l.codigo_lote AS codigo_lote',
-        'l.deposito_id AS deposito_id',
-        'l.producto_final_id AS producto_final_id',
-        'l.fecha_produccion AS fecha_produccion',
-        'l.fecha_vencimiento AS fecha_vencimiento',
-        'l.estado AS estado',
-      ])
-      .where('l.tenant_id = :tenantId', { tenantId })
-      .andWhere('l.id = :id', { id: it.lotePf.id })
-      .getRawOne<{
-        id: string;
-        codigo_lote: string;
-        deposito_id: string;
-        producto_final_id: string;
-        fecha_produccion: Date | string;
-        fecha_vencimiento: Date | string | null;
-        estado: LotePfEstado | string | null;
-      }>();
+          const raw = await lotePfRepo
+            .createQueryBuilder('l')
+            .select([
+              'l.id AS id',
+              'l.codigo_lote AS codigo_lote',
+              'l.deposito_id AS deposito_id',
+              'l.producto_final_id AS producto_final_id',
+              'l.fecha_produccion AS fecha_produccion',
+              'l.fecha_vencimiento AS fecha_vencimiento',
+              'l.estado AS estado',
+            ])
+            .where('l.tenant_id = :tenantId', { tenantId })
+            .andWhere('l.id = :id', { id: it.lotePf.id })
+            .getRawOne<{
+              id: string;
+              codigo_lote: string;
+              deposito_id: string;
+              producto_final_id: string;
+              fecha_produccion: Date | string;
+              fecha_vencimiento: Date | string | null;
+              estado: LotePfEstado | string | null;
+            }>();
 
-    if (!raw) throw new NotFoundException('Lote PF no encontrado');
+          if (!raw) throw new NotFoundException('Lote PF no encontrado');
 
-    // 3) Validar depósito origen por FK real
-    if (raw.deposito_id !== origen.id) {
-      throw new BadRequestException(
-        `El lote PF ${raw.codigo_lote} no pertenece al depósito origen`,
-      );
-    }
+          if (raw.deposito_id !== origen.id) {
+            throw new BadRequestException(
+              `El lote PF ${raw.codigo_lote} no pertenece al depósito origen`,
+            );
+          }
 
-    // 4) Validar estado (LISTO)
-    if (raw.estado && raw.estado !== LotePfEstado.LISTO) {
-      throw new BadRequestException(
-        `El lote ${raw.codigo_lote} no está LISTO (estado: ${raw.estado})`,
-      );
-    }
+          if (raw.estado && raw.estado !== LotePfEstado.LISTO) {
+            throw new BadRequestException(
+              `El lote ${raw.codigo_lote} no está LISTO (estado: ${raw.estado})`,
+            );
+          }
 
-    // 5) Validar que exista producto_final_id (NOT NULL en DB)
-    if (!raw.producto_final_id) {
-      throw new BadRequestException(
-        `El lote PF ${raw.codigo_lote} no tiene producto_final_id (datos inconsistentes)`,
-      );
-    }
+          if (!raw.producto_final_id) {
+            throw new BadRequestException(
+              `El lote PF ${raw.codigo_lote} no tiene producto_final_id (datos inconsistentes)`,
+            );
+          }
 
-    // 6) Validar stock disponible
-    const disp = dec(lote.cantidadActualKg);
-    if (disp < kg) {
-      throw new BadRequestException(
-        `Stock insuficiente en lote PF (disp ${disp}, req ${kg})`,
-      );
-    }
+          const disp = dec(lote.cantidadActualKg);
+          if (disp < kg) {
+            throw new BadRequestException(
+              `Stock insuficiente en lote PF ${raw.codigo_lote} (disp ${disp}, req ${kg})`,
+            );
+          }
 
-    // 7) Descontar origen
-    lote.cantidadActualKg = disp - kg;
-    await lotePfRepo.save(lote);
+          const isMove = disp === kg;
 
-    // 8) Crear lote destino “hijo” (split) seteando IDs reales
-    const codigoHijo = await this.generarCodigoSplit(
-      trx,
-      tenantId,
-      raw.codigo_lote,
-      'PF',
-    );
+          if (isMove) {
+            (lote as any).deposito = { id: destino.id } as any;
+            await lotePfRepo.save(lote);
 
-    const nuevo = lotePfRepo.create({
-      tenantId,
-      codigoLote: codigoHijo,
-      cantidadInicialKg: kg,
-      cantidadActualKg: kg,
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
+                lotePF: { id: lote.id } as any,
+                deposito: { id: origen.id } as any,
+                cantidadKg: -kg,
+                referenciaId: t.id,
+              }),
+            );
 
-      // ✅ seteo por id para evitar depender de eager dentro del trx
-      deposito: { id: destino.id } as any,
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
+                lotePF: { id: lote.id } as any,
+                deposito: { id: destino.id } as any,
+                cantidadKg: +kg,
+                referenciaId: t.id,
+              }),
+            );
 
-      // ✅ usar fechas reales del lote padre
-      fechaProduccion: raw.fecha_produccion as any,
-      fechaVencimiento: (raw.fecha_vencimiento ?? null) as any,
+            it.cantidadKg = kg;
+            it.descripcion =
+              it.descripcion ?? `Move: ${raw.codigo_lote} -> depósito destino`;
+            await itemRepo.save(it);
+          } else {
+            // split
+            lote.cantidadActualKg = disp - kg;
+            await lotePfRepo.save(lote);
 
-      estado: LotePfEstado.LISTO,
-      motivoEstado: `Split desde ${raw.codigo_lote} por transferencia ${t.id}`,
-      fechaEstado: new Date(),
+            const loteDestino = await this.crearLotePfSplitConRetry(
+              trx,
+              tenantId,
+              raw.codigo_lote,
+              raw,
+              destino.id,
+              kg,
+              t.id,
+            );
 
-      // ✅ CLAVE: productoFinal SIEMPRE con id real
-      productoFinal: { id: raw.producto_final_id } as any,
-    });
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
+                lotePF: { id: lote.id } as any,
+                deposito: { id: origen.id } as any,
+                cantidadKg: -kg,
+                referenciaId: t.id,
+              }),
+            );
 
-    const loteDestino = await lotePfRepo.save(nuevo);
+            await movRepo.save(
+              movRepo.create({
+                tenantId,
+                tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
+                lotePF: { id: loteDestino.id } as any,
+                deposito: { id: destino.id } as any,
+                cantidadKg: +kg,
+                referenciaId: t.id,
+              }),
+            );
 
-    // 9) Movimientos (salida + entrada)
-    await movRepo.save(
-      movRepo.create({
-        tenantId,
-        tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
-        lotePF: { id: lote.id } as any,
-        deposito: { id: origen.id } as any,
-        cantidadKg: -kg,
-        referenciaId: t.id,
-      }),
-    );
+            it.cantidadKg = kg;
+            it.descripcion =
+              it.descripcion ??
+              `Split: ${raw.codigo_lote} -> ${loteDestino.codigoLote}`;
+            await itemRepo.save(it);
+          }
+        }
+      }
 
-    await movRepo.save(
-      movRepo.create({
-        tenantId,
-        tipo: TipoMovimiento.TRANSFERENCIA_PF as any,
-        lotePF: { id: loteDestino.id } as any,
-        deposito: { id: destino.id } as any,
-        cantidadKg: +kg,
-        referenciaId: t.id,
-      }),
-    );
-
-    // 10) Persistir item
-    it.cantidadKg = kg;
-    it.descripcion =
-      it.descripcion ?? `Split: ${raw.codigo_lote} -> ${codigoHijo}`;
-    await itemRepo.save(it);
-  }
-}
-      //======================
+      // =====================
       // PF envasado (move unidades)
       // =====================
       if (t.tipo === TransferenciaTipo.PF_ENVASADO) {
@@ -470,8 +554,6 @@ if (t.tipo === TransferenciaTipo.PF_GRANEL) {
             );
           }
 
-          // FEFO: tomar unidades DISPONIBLE del depósito origen
-          // OJO: acá el lock está OK porque usamos INNER JOIN (no outer join)
           const unidades = await unidadRepo
             .createQueryBuilder('u')
             .setLock('pessimistic_write')
@@ -498,8 +580,7 @@ if (t.tipo === TransferenciaTipo.PF_GRANEL) {
           }
           await unidadRepo.save(unidades);
 
-          // guardar detalle en transferencia_unidades
-          // ✅ usar referencia a transferencia por id (más estable dentro del trx)
+          // detalle en transferencia_unidades
           for (const u of unidades) {
             await tuRepo.save(
               tuRepo.create({
@@ -510,30 +591,46 @@ if (t.tipo === TransferenciaTipo.PF_GRANEL) {
             );
           }
 
-          // ajustar stock_presentaciones (origen -cant, destino +cant)
-          const [stockO, stockD] = await Promise.all([
-            stockPresRepo.findOne({
-              where: {
-                tenantId,
-                presentacion: { id: pres.id } as any,
-                deposito: { id: origen.id } as any,
-              },
-              lock: { mode: 'pessimistic_write' },
-              loadEagerRelations: false,
-            }),
-            stockPresRepo.findOne({
-              where: {
-                tenantId,
-                presentacion: { id: pres.id } as any,
-                deposito: { id: destino.id } as any,
-              },
-              lock: { mode: 'pessimistic_write' },
-              loadEagerRelations: false,
-            }),
-          ]);
+          // lock de stock presentaciones en orden determinístico (evita deadlocks cruzados)
+          const [depA, depB] =
+            origen.id < destino.id ? [origen, destino] : [destino, origen];
+
+          const stockA = await stockPresRepo.findOne({
+            where: {
+              tenantId,
+              presentacion: { id: pres.id } as any,
+              deposito: { id: depA.id } as any,
+            },
+            lock: { mode: 'pessimistic_write' },
+            loadEagerRelations: false,
+          });
+
+          const stockB = await stockPresRepo.findOne({
+            where: {
+              tenantId,
+              presentacion: { id: pres.id } as any,
+              deposito: { id: depB.id } as any,
+            },
+            lock: { mode: 'pessimistic_write' },
+            loadEagerRelations: false,
+          });
 
           const so =
-            stockO ??
+            stockA && depA.id === origen.id
+              ? stockA
+              : stockB && depB.id === origen.id
+                ? stockB
+                : null;
+
+          const sd =
+            stockA && depA.id === destino.id
+              ? stockA
+              : stockB && depB.id === destino.id
+                ? stockB
+                : null;
+
+          const stockOrigen =
+            so ??
             stockPresRepo.create({
               tenantId,
               presentacion: pres,
@@ -542,8 +639,8 @@ if (t.tipo === TransferenciaTipo.PF_GRANEL) {
               stockUnidades: 0,
             });
 
-          const sd =
-            stockD ??
+          const stockDestino =
+            sd ??
             stockPresRepo.create({
               tenantId,
               presentacion: pres,
@@ -552,26 +649,31 @@ if (t.tipo === TransferenciaTipo.PF_GRANEL) {
               stockUnidades: 0,
             });
 
-          so.stockUnidades = dec(so.stockUnidades) - cant;
-          sd.stockUnidades = dec(sd.stockUnidades) + cant;
+          stockOrigen.stockUnidades = dec(stockOrigen.stockUnidades) - cant;
+          stockDestino.stockUnidades = dec(stockDestino.stockUnidades) + cant;
 
-          if (dec(so.stockUnidades) < 0) {
+          if (dec(stockOrigen.stockUnidades) < 0) {
             throw new BadRequestException(
               'StockPresentacion origen quedó negativo (desincronización)',
             );
           }
 
-          await stockPresRepo.save([so, sd]);
+          await stockPresRepo.save([stockOrigen, stockDestino]);
 
           const peso = dec(
             (unidades[0] as any)?.pesoKg ?? pres.pesoPorUnidadKg,
           );
           const kgTotal = peso * cant;
 
-          // agrupar por loteOrigen
+          // agrupar por loteOrigen (validando null)
           const map = new Map<string, number>();
           for (const u of unidades) {
             const lid = (u.loteOrigen as any)?.id;
+            if (!lid) {
+              throw new BadRequestException(
+                'Unidad envasada sin loteOrigen (datos inconsistentes)',
+              );
+            }
             map.set(lid, (map.get(lid) ?? 0) + 1);
           }
 
@@ -622,6 +724,112 @@ if (t.tipo === TransferenciaTipo.PF_GRANEL) {
     });
   }
 
+  // ============================================================
+  // Helpers robustos split (reintento por unique en codigo_lote)
+  // ============================================================
+
+  private async crearLoteMpSplitConRetry(
+    trx: any,
+    tenantId: string,
+    codigoBase: string,
+    fks: { recepcion_id: string; materia_prima_id: string },
+    destinoDepositoId: string,
+    lotePadre: LoteMP,
+    kg: number,
+    transferenciaId: string,
+  ) {
+    const repo = trx.getRepository(LoteMP);
+
+    for (let intento = 1; intento <= 5; intento++) {
+      const codigoHijo = await this.generarCodigoSplit(
+        trx,
+        tenantId,
+        codigoBase,
+        'MP',
+      );
+
+      try {
+        const nuevo = repo.create({
+          tenantId,
+          recepcion: { id: fks.recepcion_id } as any,
+          materiaPrima: { id: fks.materia_prima_id } as any,
+          deposito: { id: destinoDepositoId } as any,
+          codigoLote: codigoHijo,
+          fechaElaboracion: (lotePadre as any).fechaElaboracion,
+          fechaAnalisis: (lotePadre as any).fechaAnalisis ?? null,
+          fechaVencimiento: (lotePadre as any).fechaVencimiento,
+          cantidadInicialKg: kg,
+          cantidadActualKg: kg,
+          analisis: (lotePadre as any).analisis ?? null,
+          documentos: (lotePadre as any).documentos ?? null,
+        });
+
+        return await repo.save(nuevo);
+      } catch (e) {
+        if (isPgUniqueViolation(e) && intento < 5) continue;
+        throw e;
+      }
+    }
+
+    throw new BadRequestException(
+      `No se pudo generar codigo split MP para ${codigoBase} (colisión repetida)`,
+    );
+  }
+
+  private async crearLotePfSplitConRetry(
+    trx: any,
+    tenantId: string,
+    codigoBase: string,
+    raw: {
+      codigo_lote: string;
+      producto_final_id: string;
+      fecha_produccion: Date | string;
+      fecha_vencimiento: Date | string | null;
+    },
+    destinoDepositoId: string,
+    kg: number,
+    transferenciaId: string,
+  ) {
+    const repo = trx.getRepository(LoteProductoFinal);
+
+    for (let intento = 1; intento <= 5; intento++) {
+      const codigoHijo = await this.generarCodigoSplit(
+        trx,
+        tenantId,
+        codigoBase,
+        'PF',
+      );
+
+      try {
+        const nuevo = repo.create({
+          tenantId,
+          codigoLote: codigoHijo,
+          cantidadInicialKg: kg,
+          cantidadActualKg: kg,
+          deposito: { id: destinoDepositoId } as any,
+          fechaProduccion: raw.fecha_produccion as any,
+          fechaVencimiento: (raw.fecha_vencimiento ?? null) as any,
+          estado: LotePfEstado.LISTO,
+          motivoEstado: `Split desde ${raw.codigo_lote} por transferencia ${transferenciaId}`,
+          fechaEstado: new Date(),
+          productoFinal: { id: raw.producto_final_id } as any,
+        });
+
+        return await repo.save(nuevo);
+      } catch (e) {
+        if (isPgUniqueViolation(e) && intento < 5) continue;
+        throw e;
+      }
+    }
+
+    throw new BadRequestException(
+      `No se pudo generar codigo split PF para ${codigoBase} (colisión repetida)`,
+    );
+  }
+
+  // ============================================================
+  // Código split genérico (MP/PF)
+  // ============================================================
   private async generarCodigoSplit(
     trx: any,
     tenantId: string,
@@ -649,28 +857,5 @@ if (t.tipo === TransferenciaTipo.PF_GRANEL) {
     }
     const next = String(max + 1).padStart(4, '0');
     return `${base}${next}`;
-  }
-
-  private async generarCodigoSplitMP(
-    trx: any,
-    tenantId: string,
-    codigoBase: string,
-  ) {
-    const repo = trx.getRepository(LoteMP);
-    const base = `${codigoBase}-T`;
-
-    const rows = (await repo
-      .createQueryBuilder('l')
-      .select('l.codigo_lote', 'codigo')
-      .where('l.tenant_id = :tenantId', { tenantId })
-      .andWhere('l.codigo_lote LIKE :p', { p: `${base}%` })
-      .getRawMany()) as { codigo: string }[];
-
-    let max = 0;
-    for (const r of rows) {
-      const m = (r.codigo ?? '').match(/-T(\d+)$/);
-      if (m?.[1]) max = Math.max(max, Number(m[1]));
-    }
-    return `${base}${String(max + 1).padStart(4, '0')}`;
   }
 }

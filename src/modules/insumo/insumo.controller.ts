@@ -9,16 +9,33 @@ import {
   Body,
   UseGuards,
   ParseUUIDPipe,
+  Query,
 } from '@nestjs/common';
 import { InsumoService } from './insumo.service';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CreateInsumoDto } from './dto/create-insumo.dto';
 import { UpdateInsumoDto } from './dto/update-insumo.dto';
 import { AjusteStockDto, MovimientoStockDto } from './dto/movimiento-stock.dto';
+import { QueryMovimientosInsumoDto } from './dto/query-movimientos-insumo.dto';
 
 @Controller('insumos')
 export class InsumoController {
   constructor(private service: InsumoService) {}
+
+  
+
+  @UseGuards(AuthGuard)
+  @Get('minimos/bajo')
+  bajoMinimo(@Req() req) {
+    return this.service.insumosBajoMinimo(req.tenantId);
+  }
+
+  // ✅ NUEVO: movimientos de TODOS los insumos (paginado + filtros)
+  @UseGuards(AuthGuard)
+  @Get('movimientos')
+  movimientosGlobal(@Req() req, @Query() query: QueryMovimientosInsumoDto) {
+    return this.service.listarMovimientosPaginado(req.tenantId, query);
+  }
 
   @UseGuards(AuthGuard)
   @Get()
@@ -32,17 +49,21 @@ export class InsumoController {
     return this.service.create(req.tenantId, dto);
   }
 
+  // ✅ movimientos por insumo (ahora con paginado/filtros)
+  @UseGuards(AuthGuard)
+  @Get(':id/movimientos')
+  movimientosPorInsumo(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req,
+    @Query() query: QueryMovimientosInsumoDto,
+  ) {
+    return this.service.listarMovimientosPorInsumo(req.tenantId, id, query);
+  }
+
   @UseGuards(AuthGuard)
   @Get(':id')
   getOne(@Param('id', new ParseUUIDPipe()) id: string, @Req() req) {
     return this.service.findOne(id, req.tenantId);
-  }
-
-  // ✅ NUEVO: insumos por debajo del stock mínimo
-  @UseGuards(AuthGuard)
-  @Get('minimos/bajo')
-  bajoMinimo(@Req() req) {
-    return this.service.insumosBajoMinimo(req.tenantId);
   }
 
   @UseGuards(AuthGuard)

@@ -6,32 +6,51 @@ import {
   IsString,
   IsUUID,
   ValidateNested,
+  IsNumber,
+  Min,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { TransferenciaTipo } from '../entities/transferencia.entity';
 
 export class CreateTransferenciaItemDto {
+  // MP
   @IsOptional()
   @IsUUID()
   loteMpId?: string;
 
+  // PF granel
   @IsOptional()
   @IsUUID()
   lotePfId?: string;
 
+  // PF envasado
   @IsOptional()
   @IsUUID()
   presentacionId?: string;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.0001)
   cantidadKg?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
   cantidadUnidades?: number;
 
   @IsOptional()
   @IsString()
   descripcion?: string;
+
+  // “campo dummy” para obligar a que venga ALGÚN target
+  @ValidateIf((o) => !o.loteMpId && !o.lotePfId && !o.presentacionId)
+  @IsUUID(undefined, {
+    message: 'Debe venir loteMpId o lotePfId o presentacionId',
+  })
+  _dummyTarget?: string;
 }
 
 export class CreateTransferenciaDto {

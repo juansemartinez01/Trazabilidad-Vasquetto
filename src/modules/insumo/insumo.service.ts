@@ -10,6 +10,7 @@ import { CreateInsumoDto } from './dto/create-insumo.dto';
 import { UpdateInsumoDto } from './dto/update-insumo.dto';
 import { InsumoMovimiento, TipoMovimientoInsumo } from './entities/insumo-movimiento.entity';
 import { AjusteStockDto, MovimientoStockDto } from './dto/movimiento-stock.dto';
+import { QueryMovimientosInsumoDto } from './dto/query-movimientos-insumo.dto';
 
 @Injectable()
 export class InsumoService {
@@ -236,6 +237,98 @@ export class InsumoService {
         insumo,
         movimiento: mov,
       };
+    });
+  }
+
+  async listarMovimientosPaginado(
+    tenantId: string,
+    query: QueryMovimientosInsumoDto,
+  ) {
+    const page = Number(query.page ?? 1);
+    const limit = Math.min(200, Math.max(1, Number(query.limit ?? 50)));
+    const skip = (page - 1) * limit;
+
+    const qb = this.movRepo
+      .createQueryBuilder('m')
+      .innerJoin('m.insumo', 'i')
+      .where('m.tenant_id = :tenantId', { tenantId });
+
+    // ✅ filtros
+    if (query.insumoId) {
+      qb.andWhere('m.insumo_id = :insumoId', { insumoId: query.insumoId });
+    }
+
+    if (query.tipo) {
+      qb.andWhere('m.tipo = :tipo', { tipo: query.tipo });
+    }
+
+    if (query.desde) {
+      qb.andWhere('m.created_at >= :desde', { desde: query.desde });
+    }
+
+    if (query.hasta) {
+      qb.andWhere('m.created_at <= :hasta', { hasta: query.hasta });
+    }
+
+    if (query.referenciaId) {
+      qb.andWhere('m.referenciaId = :referenciaId', {
+        referenciaId: query.referenciaId,
+      });
+    }
+
+    if (query.responsableId) {
+      qb.andWhere('m.responsableId = :responsableId', {
+        responsableId: query.responsableId,
+      });
+    }
+
+    if (query.q?.trim()) {
+      // Postgres: ILIKE
+      qb.andWhere('i.nombre ILIKE :q', { q: `%${query.q.trim()}%` });
+    }
+
+    // ✅ select “liviano” (si querés podés incluir documentos)
+    qb.select([
+      'm.id',
+      'm.createdAt',
+      'm.tipo',
+      'm.cantidad',
+      'm.motivo',
+      'm.referenciaId',
+      'm.responsableId',
+      'm.documentos',
+      'm.insumoId',
+      'i.id',
+      'i.nombre',
+      'i.unidad',
+      'i.esEnvase',
+    ]);
+
+    // orden
+    const order = (query.order ?? 'DESC') === 'ASC' ? 'ASC' : 'DESC';
+    qb.orderBy('m.created_at', order);
+
+    // paginado + total
+    const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    return {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      items,
+    };
+  }
+
+  // mantiene tu endpoint viejo por insumo, pero con paginación/filtros:
+  async listarMovimientosPorInsumo(
+    tenantId: string,
+    insumoId: string,
+    query: QueryMovimientosInsumoDto,
+  ) {
+    return this.listarMovimientosPaginado(tenantId, {
+      ...query,
+      insumoId,
     });
   }
 }

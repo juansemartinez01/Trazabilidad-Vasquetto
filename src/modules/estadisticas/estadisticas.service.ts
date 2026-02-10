@@ -204,7 +204,7 @@ export class EstadisticasService {
 
   async clientes(tenantId: string, q: QueryEstadisticasClientesDto) {
     const periodo = q.periodo ?? 'month';
-    const trunc = periodo; // 'month'|'year'
+    const trunc = periodo;
 
     if (trunc !== 'month' && trunc !== 'year') {
       throw new BadRequestException('periodo inválido');
@@ -215,6 +215,7 @@ export class EstadisticasService {
 
     // ----------------------------
     // 1) Determinar "top clientes" (si NO viene clienteId)
+    //    ✅ TOP ya filtrado por productoFinalId / presentacionId
     // ----------------------------
     let topIds: string[] | null = null;
 
@@ -222,14 +223,28 @@ export class EstadisticasService {
       const topQb = this.entregaRepo
         .createQueryBuilder('e')
         .leftJoin('e.cliente', 'c')
-        .leftJoin('e.items', 'it') // <- asumo relación Entrega.items -> EntregaItem
+        .leftJoin('e.items', 'it')
+        .leftJoin('it.lote', 'pfLote') // lote PF
+        .leftJoin('pfLote.productoFinal', 'pf')
+        .leftJoin('it.presentacion', 'pres')
         .where('e.tenantId = :tenantId', { tenantId });
 
       if (q.desde) topQb.andWhere('e.fecha >= :desde', { desde: q.desde });
       if (q.hasta) topQb.andWhere('e.fecha <= :hasta', { hasta: q.hasta });
 
+      // ✅ filtro por PF / Presentación
+      if (q.productoFinalId) {
+        topQb.andWhere('pf.id = :pfId', { pfId: q.productoFinalId });
+      }
+      if (q.presentacionId) {
+        topQb.andWhere('pres.id = :presId', { presId: q.presentacionId });
+      }
+
       topQb
-        .select(['c.id AS "clienteId"', 'SUM(it.cantidadKg) AS "cantidadKg"'])
+        .select([
+          'c.id AS "clienteId"',
+          'COALESCE(SUM(it.cantidadKg),0) AS "cantidadKg"',
+        ])
         .groupBy('c.id')
         .orderBy('"cantidadKg"', 'DESC')
         .limit(top);
@@ -250,27 +265,35 @@ export class EstadisticasService {
       .createQueryBuilder('e')
       .leftJoin('e.cliente', 'c')
       .leftJoin('e.items', 'it')
+      .leftJoin('it.lote', 'pfLote')
+      .leftJoin('pfLote.productoFinal', 'pf')
+      .leftJoin('it.presentacion', 'pres')
       .where('e.tenantId = :tenantId', { tenantId });
 
     if (q.desde) qb.andWhere('e.fecha >= :desde', { desde: q.desde });
     if (q.hasta) qb.andWhere('e.fecha <= :hasta', { hasta: q.hasta });
 
+    // ✅ filtro por PF / Presentación (aplica siempre)
+    if (q.productoFinalId) {
+      qb.andWhere('pf.id = :pfId', { pfId: q.productoFinalId });
+    }
+    if (q.presentacionId) {
+      qb.andWhere('pres.id = :presId', { presId: q.presentacionId });
+    }
+
     // Si viene clienteId, filtramos directo
     if (q.clienteId) {
       qb.andWhere('c.id = :cid', { cid: q.clienteId });
-    } else if (topIds && topIds.length > 0 && incluirOtros) {
-      // Traemos top + no-top para poder calcular OTROS
-      // (no filtramos acá, filtramos luego en JS separando)
     } else if (topIds && topIds.length > 0 && !incluirOtros) {
-      // Solo top
       qb.andWhere('c.id IN (:...topIds)', { topIds });
     }
+    // incluirOtros=true → no filtramos, armamos OTROS en JS (igual que ahora)
 
     qb.select([
       `${bucketExpr} AS "periodo"`,
       `c.id AS "clienteId"`,
-      `c.razonSocial AS "clienteNombre"`, // ajustá si tu cliente tiene otro campo
-      `SUM(it.cantidadKg) AS "cantidadKg"`,
+      `c.razonSocial AS "clienteNombre"`,
+      `COALESCE(SUM(it.cantidadKg),0) AS "cantidadKg"`,
     ])
       .groupBy('"periodo"')
       .addGroupBy('c.id')
@@ -285,16 +308,14 @@ export class EstadisticasService {
       cantidadKg: string;
     }>();
 
-    const normalized: SerieClienteRow[] = rows.map((r) => ({
+    const normalized = rows.map((r) => ({
       periodo: new Date(r.periodo as any).toISOString(),
       clienteId: r.clienteId,
       clienteNombre: r.clienteNombre,
       cantidadKg: Number(r.cantidadKg ?? 0),
     }));
 
-    // ----------------------------
-    // 3) Si no hay topIds (porque vino clienteId), devolvemos directo
-    // ----------------------------
+    // 3) Si vino clienteId → devolvemos directo
     if (q.clienteId) {
       return {
         periodo: trunc,
@@ -302,13 +323,15 @@ export class EstadisticasService {
         hasta: q.hasta ?? null,
         top: null,
         incluirOtros: false,
+        filtro: {
+          productoFinalId: q.productoFinalId ?? null,
+          presentacionId: q.presentacionId ?? null,
+        },
         items: normalized,
       };
     }
 
-    // ----------------------------
-    // 4) Top + OTROS (si corresponde)
-    // ----------------------------
+    // 4) Top + OTROS
     if (!topIds || topIds.length === 0) {
       return {
         periodo: trunc,
@@ -316,30 +339,33 @@ export class EstadisticasService {
         hasta: q.hasta ?? null,
         top,
         incluirOtros,
+        filtro: {
+          productoFinalId: q.productoFinalId ?? null,
+          presentacionId: q.presentacionId ?? null,
+        },
         items: [],
       };
     }
 
     if (!incluirOtros) {
-      // ya filtramos en SQL, devolvemos tal cual
       return {
         periodo: trunc,
         desde: q.desde ?? null,
         hasta: q.hasta ?? null,
         top,
         incluirOtros: false,
+        filtro: {
+          productoFinalId: q.productoFinalId ?? null,
+          presentacionId: q.presentacionId ?? null,
+        },
         items: normalized,
       };
     }
 
-    // incluirOtros=true:
-    // separo top vs resto y genero fila "OTROS" por periodo
     const topSet = new Set(topIds);
-
     const topRows = normalized.filter((r) => topSet.has(r.clienteId ?? ''));
     const restRows = normalized.filter((r) => !topSet.has(r.clienteId ?? ''));
 
-    // Agrupar "resto" por periodo
     const otrosByPeriodo = new Map<string, number>();
     for (const r of restRows) {
       otrosByPeriodo.set(
@@ -348,7 +374,7 @@ export class EstadisticasService {
       );
     }
 
-    const otrosRows: SerieClienteRow[] = Array.from(otrosByPeriodo.entries())
+    const otrosRows = Array.from(otrosByPeriodo.entries())
       .filter(([, kg]) => kg > 0)
       .map(([periodoStr, kg]) => ({
         periodo: periodoStr,
@@ -363,6 +389,10 @@ export class EstadisticasService {
       hasta: q.hasta ?? null,
       top,
       incluirOtros: true,
+      filtro: {
+        productoFinalId: q.productoFinalId ?? null,
+        presentacionId: q.presentacionId ?? null,
+      },
       items: [...topRows, ...otrosRows].sort((a, b) =>
         a.periodo === b.periodo
           ? a.clienteNombre.localeCompare(b.clienteNombre)
@@ -382,6 +412,7 @@ export class EstadisticasService {
 
     // ----------------------------
     // 1) Top proveedores por KG (si no viene proveedorId)
+    //    ✅ TOP ya filtrado por materiaPrimaId
     // ----------------------------
     let topIds: string[] | null = null;
 
@@ -390,6 +421,7 @@ export class EstadisticasService {
         .createQueryBuilder('r')
         .leftJoin('r.proveedor', 'p')
         .leftJoin('r.lotes', 'l') // LoteMP
+        .leftJoin('l.materiaPrima', 'mp')
         .where('r.tenantId = :tenantId', { tenantId });
 
       if (q.desde)
@@ -397,10 +429,15 @@ export class EstadisticasService {
       if (q.hasta)
         topQb.andWhere('r.fechaRemito <= :hasta', { hasta: q.hasta });
 
+      // ✅ filtro por MP
+      if (q.materiaPrimaId) {
+        topQb.andWhere('mp.id = :mpId', { mpId: q.materiaPrimaId });
+      }
+
       topQb
         .select([
           'p.id AS "proveedorId"',
-          'SUM(l.cantidadInicialKg) AS "cantidadKg"',
+          'COALESCE(SUM(l.cantidadInicialKg),0) AS "cantidadKg"',
         ])
         .groupBy('p.id')
         .orderBy('"cantidadKg"', 'DESC')
@@ -422,10 +459,16 @@ export class EstadisticasService {
       .createQueryBuilder('r')
       .leftJoin('r.proveedor', 'p')
       .leftJoin('r.lotes', 'l')
+      .leftJoin('l.materiaPrima', 'mp')
       .where('r.tenantId = :tenantId', { tenantId });
 
     if (q.desde) qb.andWhere('r.fechaRemito >= :desde', { desde: q.desde });
     if (q.hasta) qb.andWhere('r.fechaRemito <= :hasta', { hasta: q.hasta });
+
+    // ✅ filtro por MP (aplica siempre)
+    if (q.materiaPrimaId) {
+      qb.andWhere('mp.id = :mpId', { mpId: q.materiaPrimaId });
+    }
 
     if (q.proveedorId) {
       qb.andWhere('p.id = :pid', { pid: q.proveedorId });
@@ -436,7 +479,7 @@ export class EstadisticasService {
     qb.select([
       `${bucketExpr} AS "periodo"`,
       `p.id AS "proveedorId"`,
-      `p.razonSocial AS "proveedorNombre"`, // 👈 si es razonSocial, cambiá acá
+      `p.razonSocial AS "proveedorNombre"`,
       `COALESCE(SUM(l.cantidadInicialKg), 0) AS "cantidadKg"`,
       `COUNT(DISTINCT r.id) AS "recepciones"`,
     ])
@@ -454,7 +497,7 @@ export class EstadisticasService {
       recepciones: string;
     }>();
 
-    const normalized: SerieProveedorRow[] = rows.map((r) => ({
+    const normalized = rows.map((r) => ({
       periodo: new Date(r.periodo as any).toISOString(),
       proveedorId: r.proveedorId,
       proveedorNombre: r.proveedorNombre,
@@ -462,9 +505,7 @@ export class EstadisticasService {
       recepciones: Number(r.recepciones ?? 0),
     }));
 
-    // ----------------------------
     // 3) Si vino proveedorId → devolvemos directo
-    // ----------------------------
     if (q.proveedorId) {
       return {
         periodo,
@@ -472,13 +513,14 @@ export class EstadisticasService {
         hasta: q.hasta ?? null,
         top: null,
         incluirOtros: false,
+        filtro: {
+          materiaPrimaId: q.materiaPrimaId ?? null,
+        },
         items: normalized,
       };
     }
 
-    // ----------------------------
     // 4) Top + OTROS (por periodo)
-    // ----------------------------
     if (!topIds || topIds.length === 0) {
       return {
         periodo,
@@ -486,6 +528,9 @@ export class EstadisticasService {
         hasta: q.hasta ?? null,
         top,
         incluirOtros,
+        filtro: {
+          materiaPrimaId: q.materiaPrimaId ?? null,
+        },
         items: [],
       };
     }
@@ -497,6 +542,9 @@ export class EstadisticasService {
         hasta: q.hasta ?? null,
         top,
         incluirOtros: false,
+        filtro: {
+          materiaPrimaId: q.materiaPrimaId ?? null,
+        },
         items: normalized,
       };
     }
@@ -513,7 +561,7 @@ export class EstadisticasService {
       otrosByPeriodo.set(r.periodo, cur);
     }
 
-    const otrosRows: SerieProveedorRow[] = Array.from(otrosByPeriodo.entries())
+    const otrosRows = Array.from(otrosByPeriodo.entries())
       .filter(([, v]) => v.kg > 0 || v.rec > 0)
       .map(([periodoIso, v]) => ({
         periodo: periodoIso,
@@ -529,6 +577,9 @@ export class EstadisticasService {
       hasta: q.hasta ?? null,
       top,
       incluirOtros: true,
+      filtro: {
+        materiaPrimaId: q.materiaPrimaId ?? null,
+      },
       items: [...topRows, ...otrosRows].sort((a, b) => {
         const ta = new Date(a.periodo).getTime();
         const tb = new Date(b.periodo).getTime();

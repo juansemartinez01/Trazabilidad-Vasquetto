@@ -36,4 +36,14 @@ export class QueryEstadisticasClientesDto {
   @IsOptional()
   @IsUUID()
   clienteId?: string;
+
+  // ✅ NUEVO: filtrar comparaciones por PF (coherente)
+  @IsOptional()
+  @IsUUID()
+  productoFinalId?: string;
+
+  // ✅ opcional: si querés comparar por presentación específica
+  @IsOptional()
+  @IsUUID()
+  presentacionId?: string;
 }

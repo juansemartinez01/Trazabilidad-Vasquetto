@@ -36,4 +36,9 @@ export class QueryEstadisticasProveedoresDto {
   @IsOptional()
   @IsUUID()
   proveedorId?: string;
+
+  // ✅ NUEVO: filtrar comparaciones por MP (coherente)
+  @IsOptional()
+  @IsUUID()
+  materiaPrimaId?: string;
 }

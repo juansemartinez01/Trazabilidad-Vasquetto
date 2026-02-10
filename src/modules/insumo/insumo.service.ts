@@ -251,43 +251,32 @@ export class InsumoService {
     const qb = this.movRepo
       .createQueryBuilder('m')
       .innerJoin('m.insumo', 'i')
-      .where('m.tenant_id = :tenantId', { tenantId });
+      .where('m.tenantId = :tenantId', { tenantId });
 
-    // ✅ filtros
-    if (query.insumoId) {
-      qb.andWhere('m.insumo_id = :insumoId', { insumoId: query.insumoId });
-    }
+    // filtros
+    if (query.insumoId)
+      qb.andWhere('m.insumoId = :insumoId', { insumoId: query.insumoId });
+    if (query.tipo) qb.andWhere('m.tipo = :tipo', { tipo: query.tipo });
 
-    if (query.tipo) {
-      qb.andWhere('m.tipo = :tipo', { tipo: query.tipo });
-    }
+    if (query.desde)
+      qb.andWhere('m.createdAt >= :desde', { desde: query.desde });
+    if (query.hasta)
+      qb.andWhere('m.createdAt <= :hasta', { hasta: query.hasta });
 
-    if (query.desde) {
-      qb.andWhere('m.created_at >= :desde', { desde: query.desde });
-    }
-
-    if (query.hasta) {
-      qb.andWhere('m.created_at <= :hasta', { hasta: query.hasta });
-    }
-
-    if (query.referenciaId) {
+    if (query.referenciaId)
       qb.andWhere('m.referenciaId = :referenciaId', {
         referenciaId: query.referenciaId,
       });
-    }
-
-    if (query.responsableId) {
+    if (query.responsableId)
       qb.andWhere('m.responsableId = :responsableId', {
         responsableId: query.responsableId,
       });
-    }
 
     if (query.q?.trim()) {
-      // Postgres: ILIKE
       qb.andWhere('i.nombre ILIKE :q', { q: `%${query.q.trim()}%` });
     }
 
-    // ✅ select “liviano” (si querés podés incluir documentos)
+    // select liviano
     qb.select([
       'm.id',
       'm.createdAt',
@@ -304,11 +293,9 @@ export class InsumoService {
       'i.esEnvase',
     ]);
 
-    // orden
     const order = (query.order ?? 'DESC') === 'ASC' ? 'ASC' : 'DESC';
-    qb.orderBy('m.created_at', order);
+    qb.orderBy('m.createdAt', order); // ✅ PROPIEDAD, no created_at
 
-    // paginado + total
     const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
     return {

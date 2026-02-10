@@ -24,6 +24,11 @@ import { QueryInsumoConsumoPfDto } from './dto/query-insumo-consumo-pf.dto';
 export class InsumoConsumoPfController {
   constructor(private service: InsumoConsumoPfService) {}
 
+  @Get('paginado')
+  listarPaginado(@Req() req, @Query() query: QueryInsumoConsumoPfDto) {
+    return this.service.listarPaginado(req.tenantId, query);
+  }
+  
   @Get()
   listar(
     @Req() req,
@@ -34,11 +39,6 @@ export class InsumoConsumoPfController {
       productoFinalId,
       presentacionId,
     });
-  }
-
-  @Get('paginado')
-  listarPaginado(@Req() req, @Query() query: QueryInsumoConsumoPfDto) {
-    return this.service.listarPaginado(req.tenantId, query);
   }
 
   @Get(':id')

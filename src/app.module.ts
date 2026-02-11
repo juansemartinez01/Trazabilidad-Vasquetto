@@ -31,6 +31,7 @@ import { EmpaquesModule } from './modules/empaques/empaques.module';
 import { FilesModule } from './modules/files/files.module';
 import { TransferenciasModule } from './modules/transferencias/transferencias.module';
 import { EstadisticasModule } from './modules/estadisticas/estadisticas.module';
+import { AdminTenantsModule } from './modules/admin-tenants/admin-tenants.module';
 
 
 @Module({
@@ -61,6 +62,7 @@ import { EstadisticasModule } from './modules/estadisticas/estadisticas.module';
     FilesModule,
     TransferenciasModule,
     EstadisticasModule,
+    AdminTenantsModule,
     // acá vamos a ir agregando módulos
   ],
   providers: [
@@ -72,7 +74,8 @@ import { EstadisticasModule } from './modules/estadisticas/estadisticas.module';
 })
 export class AppModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(TenantMiddleware).forRoutes('*');
     consumer.apply(UsuarioMiddleware).forRoutes('*');
+    consumer.apply(TenantMiddleware).forRoutes('*');
+    
   }
 }

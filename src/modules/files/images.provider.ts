@@ -4,14 +4,18 @@ import { ConfigService } from '@nestjs/config';
 
 export type ImagesClient = {
   upload(
+    s3TenantKey: string,
     buffer: Buffer,
     mime: string,
     filename: string,
     assetId?: string,
   ): Promise<{ url: string; public_id: string }>;
-  delete(publicId: string): Promise<{ message: string }>;
-  list(): Promise<Array<{ url: string; public_id: string }>>;
+
+  delete(s3TenantKey: string, publicId: string): Promise<{ message: string }>;
+
+  list(s3TenantKey: string): Promise<Array<{ url: string; public_id: string }>>;
 };
+
 
 type UrlsResponse = {
   imageId: string;
@@ -73,12 +77,12 @@ export const ImagesProvider: Provider = {
   provide: 'IMAGES',
   useFactory: (config: ConfigService): ImagesClient => {
     const base = config.get<string>('IMAGES_API_BASE');
-    const tenantKey = config.get<string>('IMAGES_TENANT_KEY');
+    
     const apiKey = config.get<string>('IMAGES_API_KEY');
     const cloudfrontBase = config.get<string>('IMAGES_CLOUDFRONT_BASE'); // opcional, para list()
 
     if (!base) throw new Error('Missing IMAGES_API_BASE');
-    if (!tenantKey) throw new Error('Missing IMAGES_TENANT_KEY');
+    
 
     
 
@@ -87,27 +91,31 @@ export const ImagesProvider: Provider = {
     
     if (!apiKey) throw new Error('Missing IMAGES_API_KEY');
 
-    const authHeaders: Record<string, string> = {
-      'x-tenant-key': tenantKey,
+    const headersFor = (s3TenantKey: string) => ({
+      'x-tenant-key': s3TenantKey,
       'x-api-key': apiKey,
-    };
+    });
+
+    
 
     return {
-      async upload(buffer, mime, filename, assetId) {
+      async upload(
+        s3TenantKey: string,
+        buffer: Buffer,
+        mime: string,
+        filename: string,
+        assetId?: string,
+      ) {
+        const authHeaders = headersFor(s3TenantKey);
+
         const t0 = Date.now();
         const mark = (s: string) =>
           console.log(`[IMAGES] ${s} +${Date.now() - t0}ms`);
 
-
         const ext = extFromMime(mime, filename);
-
         const bytes = buffer.length;
 
-
         mark('createUpload start');
-        // 1) createUpload
-        const createHeaders = new Headers(authHeaders);
-        createHeaders.set('Content-Type', 'application/json');
 
         const createRes = await fetch(`${base}/v1/images/upload`, {
           method: 'POST',
@@ -122,16 +130,12 @@ export const ImagesProvider: Provider = {
           );
         }
 
-        const created = JSON.parse(createText);
+        const created = JSON.parse(createText) as CreateUploadResponse;
 
         mark('createUpload ok');
-
-        
         mark('PUT S3 start');
 
-        // 2) PUT a S3 (presigned PUT) - RESPETAR headers del backend
         const putHeaders = new Headers(created.headers ?? {});
-        // si no vino header, setealo igual
         if (!putHeaders.get('Content-Type')) {
           putHeaders.set('Content-Type', mime);
         }
@@ -142,17 +146,12 @@ export const ImagesProvider: Provider = {
           body: buffer as any,
         });
 
-
         if (!putRes.ok) {
           const text = await putRes.text().catch(() => '');
           throw new Error(`S3 PUT failed: ${putRes.status} ${text}`);
         }
 
         mark('PUT S3 ok');
-
-        // 3) complete
-        const completeHeaders = new Headers(authHeaders);
-        completeHeaders.set('Content-Type', 'application/json');
 
         const completeRes = await fetch(
           `${base}/v1/images/${created.imageId}/complete`,
@@ -164,11 +163,9 @@ export const ImagesProvider: Provider = {
         );
 
         if (!completeRes.ok) throw new Error(await completeRes.text());
-
         mark('complete ok');
 
         mark('urls start');
-        // 4) urls
         const urlsRes = await fetch(
           `${base}/v1/images/${created.imageId}/urls`,
           {
@@ -176,13 +173,11 @@ export const ImagesProvider: Provider = {
           },
         );
         if (!urlsRes.ok) throw new Error(await urlsRes.text());
-        
 
         const urls = (await urlsRes.json()) as UrlsResponse;
 
         mark('urls ok');
-        
-        
+
         const isPdf = mime === 'application/pdf';
 
         return {
@@ -191,11 +186,11 @@ export const ImagesProvider: Provider = {
             : (urls.variants?.w800 ?? urls.originalUrl),
           public_id: created.assetId,
         };
-
       },
 
-      async delete(publicId) {
-        // publicId = assetId -> borro latest de ese asset (tu endpoint borra por imageId)
+      async delete(s3TenantKey: string, publicId: string) {
+        const authHeaders = headersFor(s3TenantKey);
+
         const latestRes = await fetch(
           `${base}/v1/images/assets/${publicId}/latest`,
           {
@@ -203,6 +198,7 @@ export const ImagesProvider: Provider = {
           },
         );
         if (!latestRes.ok) throw new Error(await latestRes.text());
+
         const latest = (await latestRes.json()) as LatestResponse;
 
         const delRes = await fetch(`${base}/v1/images/${latest.id}`, {
@@ -214,26 +210,26 @@ export const ImagesProvider: Provider = {
         return { message: 'Image deleted successfully' };
       },
 
-      async list() {
+      async list(s3TenantKey: string) {
+        const authHeaders = headersFor(s3TenantKey);
+
         const res = await fetch(`${base}/v1/images`, {
           headers: { ...authHeaders, 'Content-Type': 'application/json' },
         });
         if (!res.ok) throw new Error(await res.text());
+
         const rows = (await res.json()) as any[];
 
-        // Si no querés pegarle /urls por cada una (carísimo), armamos w800 directo
         return rows.map((img) => {
           const url = cloudfrontBase
             ? `${cloudfrontBase}/tenants/${img.tenantKey}/assets/${img.assetId}/v_${img.version}/${img.id}/w_800.webp`
-            : ''; // si no tenés cloudfrontBase en este backend, devolvé '' o armá con tu CDN
+            : '';
 
-          return {
-            url,
-            public_id: img.assetId,
-          };
+          return { url, public_id: img.assetId };
         });
       },
     };
+
   },
   inject: [ConfigService],
 };

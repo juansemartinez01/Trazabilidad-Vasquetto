@@ -9,6 +9,7 @@ import {
   HttpException,
   HttpStatus,
   Get,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { ImagesClient } from './images.provider';
@@ -19,26 +20,35 @@ export class FilesController {
 
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
-  async uploadFile(@UploadedFile() file: any) {
+  async uploadFile(@Req() req: any, @UploadedFile() file: any) {
     if (!file?.buffer) {
       throw new HttpException('Missing file', HttpStatus.BAD_REQUEST);
     }
 
-    const mime = file.mimetype;
-    const filename = file.originalname;
+    const s3TenantKey = req.s3TenantKey;
+    if (!s3TenantKey) {
+      throw new HttpException('Missing s3TenantKey', HttpStatus.UNAUTHORIZED);
+    }
 
-    const result = await this.images.upload(file.buffer, mime, filename);
+    const result = await this.images.upload(
+      s3TenantKey,
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+    );
 
-    return {
-      url: result.url, // ✅ igual que antes
-      public_id: result.public_id,
-    };
+    return { url: result.url, public_id: result.public_id };
   }
 
   @Delete('delete/:publicId')
-  async deleteFile(@Param('publicId') publicId: string) {
+  async deleteFile(@Req() req: any, @Param('publicId') publicId: string) {
+    const s3TenantKey = req.s3TenantKey;
+    if (!s3TenantKey) {
+      throw new HttpException('Missing s3TenantKey', HttpStatus.UNAUTHORIZED);
+    }
+
     try {
-      return await this.images.delete(publicId);
+      return await this.images.delete(s3TenantKey, publicId);
     } catch (e: any) {
       throw new HttpException(
         e.message ?? 'Delete failed',
@@ -48,10 +58,15 @@ export class FilesController {
   }
 
   @Get('list')
-  async listFiles() {
+  async listFiles(@Req() req: any) {
+    const s3TenantKey = req.s3TenantKey;
+    if (!s3TenantKey) {
+      throw new HttpException('Missing s3TenantKey', HttpStatus.UNAUTHORIZED);
+    }
+
     try {
-      return await this.images.list();
-    } catch (e: any) {
+      return await this.images.list(s3TenantKey);
+    } catch {
       throw new HttpException(
         'Failed to fetch images',
         HttpStatus.INTERNAL_SERVER_ERROR,

@@ -41,11 +41,69 @@ function nodeId(tipo: Tipo, refId: string) {
   return `${tipo}:${refId}`;
 }
 
+// Label “vieja” (compat UI actual)
 function fmtEntregaLabel(bultos?: number | null, kg?: number | null) {
   const parts: string[] = [];
   if (bultos && bultos > 0) parts.push(`${bultos} bultos`);
   if (kg && kg > 0) parts.push(`${kg.toFixed(2)} kg`);
   return parts.join(' · ') || undefined;
+}
+
+// ============================
+// Normalización pedida
+// ============================
+function normMpNode(params: {
+  nombre: string | null;
+  codigoLote: string | null;
+  stockInicial: number;
+  stockActual: number;
+  fechaIngreso: any;
+}) {
+  return {
+    nombre: params.nombre ?? 'Materia prima',
+    codigoLote: params.codigoLote ?? null,
+    stockInicial: params.stockInicial ?? 0,
+    stockActual: params.stockActual ?? 0,
+    fechaIngreso: params.fechaIngreso ?? null,
+  };
+}
+
+function normPfNode(params: {
+  nombre: string | null;
+  codigoLote: string | null;
+  stockInicial: number;
+  stockActual: number;
+  fechaElaboracion: any;
+}) {
+  return {
+    nombre: params.nombre ?? 'Producto final',
+    codigoLote: params.codigoLote ?? null,
+    stockInicial: params.stockInicial ?? 0,
+    stockActual: params.stockActual ?? 0,
+    fechaElaboracion: params.fechaElaboracion ?? null,
+  };
+}
+
+function fmtProductoEntrega(presNombre: string | null) {
+  return presNombre ? presNombre : 'Granel';
+}
+
+function fmtCantidadEntrega(params: {
+  presNombre: string | null;
+  bultos: number;
+  kg: number;
+}) {
+  const { presNombre, bultos, kg } = params;
+
+  // granel
+  if (!presNombre) {
+    return `${(kg ?? 0).toFixed(2)} kg`;
+  }
+
+  // bolsa/presentación
+  const u = bultos ?? 0;
+  const k = kg ?? 0;
+  return `${u} unidades - ${k.toFixed(2)} kg`;
 }
 
 @Injectable()
@@ -63,7 +121,7 @@ export class TrazabilidadService {
   ) {}
 
   // =========================================================
-  // GRAFO: MP -> PF -> CLIENTE (con meta de entrega/remito)
+  // GRAFO: MP -> PF -> CLIENTE (+ ENTREGA por item normalizada)
   // =========================================================
   async grafoDesdeMP(
     tenantId: string,
@@ -80,7 +138,6 @@ export class TrazabilidadService {
     });
     if (!mp) throw new NotFoundException('Lote de MP no encontrado');
 
-    // 1) Consumido en órdenes -> PF (vía joins)
     const consumos = await this.consumoRepo
       .createQueryBuilder('c')
       .innerJoin('c.ingrediente', 'ing')
@@ -88,7 +145,7 @@ export class TrazabilidadService {
       .leftJoin('op.loteFinal', 'pf')
       .leftJoin('pf.productoFinal', 'pfProd')
       .where('c.tenantId = :tenantId', { tenantId })
-      .andWhere('c.lote_id = :loteMpId', { loteMpId }) // ✅
+      .andWhere('c.lote_id = :loteMpId', { loteMpId })
       .select([
         'c.id as consumo_id',
         'c.cantidadKg as consumo_kg',
@@ -98,6 +155,7 @@ export class TrazabilidadService {
         'pf.estado as pf_estado',
         'pf.cantidadInicialKg as pf_kg_inicial',
         'pf.cantidadActualKg as pf_kg_actual',
+        'pf.fechaProduccion as pf_fecha_produccion',
         'pfProd.nombre as pf_nombre',
       ])
       .getRawMany<{
@@ -109,6 +167,7 @@ export class TrazabilidadService {
         pf_estado: string | null;
         pf_kg_inicial: string | null;
         pf_kg_actual: string | null;
+        pf_fecha_produccion: any | null;
         pf_nombre: string | null;
       }>();
 
@@ -116,7 +175,6 @@ export class TrazabilidadService {
       new Set(consumos.map((r) => r.pf_id).filter((x): x is string => !!x)),
     );
 
-    // 2) Entregas/items SOLO para esos PF
     const entregas = pfIds.length
       ? await this.entregaItemRepo
           .createQueryBuilder('it')
@@ -145,7 +203,7 @@ export class TrazabilidadService {
             pf_id: string;
             entrega_id: string;
             numero_remito: string;
-            entrega_fecha: string;
+            entrega_fecha: any;
             cliente_id: string;
             cliente_nombre: string;
             cantidad_kg: string | null;
@@ -156,13 +214,18 @@ export class TrazabilidadService {
           }>()
       : [];
 
-    // 3) Armar grafo
     const nodosMap = new Map<string, TrazNodo>();
     const links: TrazLink[] = [];
-
     const upsertNodo = (n: TrazNodo) => {
       if (!nodosMap.has(n.id)) nodosMap.set(n.id, n);
     };
+
+    const fechaIngreso =
+      (mp as any).fechaIngreso ??
+      (mp.recepcion as any)?.fecha ??
+      (mp as any).createdAt ??
+      mp.fechaElaboracion ??
+      null;
 
     const mpNode: TrazNodo = {
       id: nodeId('MP', mp.id),
@@ -172,10 +235,20 @@ export class TrazabilidadService {
       subtitulo: `LOT: ${mp.codigoLote}`,
       badge: mp.deposito?.nombre,
       meta: {
+        // normalizado (lo pedido)
+        normalizado: normMpNode({
+          nombre: mp.materiaPrima?.nombre ?? null,
+          codigoLote: mp.codigoLote ?? null,
+          stockInicial: Number(mp.cantidadInicialKg ?? 0),
+          stockActual: Number(mp.cantidadActualKg ?? 0),
+          fechaIngreso,
+        }),
+
+        // compat / data existente
         fechaElaboracion: mp.fechaElaboracion,
         fechaVencimiento: mp.fechaVencimiento,
         kgInicial: Number(mp.cantidadInicialKg ?? 0),
-        kgActual: Number(mp.cantidadActualKg),
+        kgActual: Number(mp.cantidadActualKg ?? 0),
         recepcionId: mp.recepcion?.id,
         proveedor: mp.recepcion?.proveedor
           ? {
@@ -188,17 +261,14 @@ export class TrazabilidadService {
     };
     upsertNodo(mpNode);
 
-    // MP -> PF (sumar kg consumidos por PF)
+    // MP -> PF
     const consumoKgPorPf = new Map<string, number>();
     const ordenPorPf = new Map<string, string>();
 
     for (const r of consumos) {
       if (!r.pf_id) continue;
-      const kg = Number(r.consumo_kg ?? 0);
-      consumoKgPorPf.set(r.pf_id, (consumoKgPorPf.get(r.pf_id) ?? 0) + kg);
-      ordenPorPf.set(r.pf_id, r.orden_id);
 
-      upsertNodo({
+      const pfNode: TrazNodo = {
         id: nodeId('PF', r.pf_id),
         tipo: 'PF',
         refId: r.pf_id,
@@ -206,12 +276,26 @@ export class TrazabilidadService {
         subtitulo: r.pf_codigo ? `LOT: ${r.pf_codigo}` : undefined,
         badge: r.pf_estado ?? undefined,
         meta: {
+          normalizado: normPfNode({
+            nombre: r.pf_nombre ?? null,
+            codigoLote: r.pf_codigo ?? null,
+            stockInicial: Number(r.pf_kg_inicial ?? 0),
+            stockActual: Number(r.pf_kg_actual ?? 0),
+            fechaElaboracion: r.pf_fecha_produccion ?? null,
+          }),
+
           ordenId: r.orden_id,
           kgInicial: Number(r.pf_kg_inicial ?? 0),
           kgActual: Number(r.pf_kg_actual ?? 0),
+          fechaProduccion: r.pf_fecha_produccion ?? null,
         },
         col: 'PROD',
-      });
+      };
+      upsertNodo(pfNode);
+
+      const kg = Number(r.consumo_kg ?? 0);
+      consumoKgPorPf.set(r.pf_id, (consumoKgPorPf.get(r.pf_id) ?? 0) + kg);
+      ordenPorPf.set(r.pf_id, r.orden_id);
     }
 
     for (const [pfId, kg] of consumoKgPorPf.entries()) {
@@ -223,7 +307,7 @@ export class TrazabilidadService {
       });
     }
 
-    // PF -> Cliente (con meta de entrega)
+    // PF -> Cliente (compat) + PF -> ENTREGA(item) -> CLIENTE (normalizado)
     for (const e of entregas) {
       const clienteNodeId = nodeId('CLIENTE', e.cliente_id);
 
@@ -238,6 +322,7 @@ export class TrazabilidadService {
       const bultos = e.cantidad_bultos ? Number(e.cantidad_bultos) : 0;
       const kg = e.cantidad_kg ? Number(e.cantidad_kg) : 0;
 
+      // Link compat (como estaba)
       links.push({
         from: nodeId('PF', e.pf_id),
         to: clienteNodeId,
@@ -254,6 +339,60 @@ export class TrazabilidadService {
             : null,
         },
       });
+
+      // Nodo ENTREGA normalizado por item (lo pedido)
+      const entregaItemNodeId = nodeId('ENTREGA', e.item_id);
+
+      upsertNodo({
+        id: entregaItemNodeId,
+        tipo: 'ENTREGA',
+        refId: e.item_id, // ref real del item (porque producto/cantidad dependen del item)
+        titulo: `Entrega ${e.numero_remito}`,
+        subtitulo: e.entrega_fecha
+          ? `Fecha: ${String(e.entrega_fecha)}`
+          : undefined,
+        badge: e.cliente_nombre,
+        meta: {
+          // normalizado (lo pedido)
+          normalizado: {
+            clienteNombre: e.cliente_nombre,
+            numeroRemito: e.numero_remito,
+            fecha: e.entrega_fecha ?? null,
+            producto: fmtProductoEntrega(e.pres_nombre),
+            cantidad: fmtCantidadEntrega({
+              presNombre: e.pres_nombre,
+              bultos,
+              kg,
+            }),
+          },
+
+          // compat extra
+          entregaId: e.entrega_id,
+          itemId: e.item_id,
+          clienteId: e.cliente_id,
+          presentacion: e.pres_id
+            ? { id: e.pres_id, codigo: e.pres_codigo, nombre: e.pres_nombre }
+            : null,
+          cantidadBultos: bultos,
+          cantidadKg: kg,
+        },
+        col: 'FORWARD',
+      });
+
+      // PF -> ENTREGA(item)
+      links.push({
+        from: nodeId('PF', e.pf_id),
+        to: entregaItemNodeId,
+        label: fmtEntregaLabel(bultos, kg),
+        meta: { entregaId: e.entrega_id, itemId: e.item_id },
+      });
+
+      // ENTREGA(item) -> CLIENTE
+      links.push({
+        from: entregaItemNodeId,
+        to: clienteNodeId,
+        meta: { entregaId: e.entrega_id, itemId: e.item_id },
+      });
     }
 
     return {
@@ -269,20 +408,18 @@ export class TrazabilidadService {
   }
 
   // =========================================================
-  // GRAFO: ENTREGA -> PF -> MP
+  // GRAFO: ENTREGA(root) -> PF -> MP (+ normalización)
   // =========================================================
   async grafoDesdeEntrega(
     tenantId: string,
     entregaId: string,
   ): Promise<TrazGrafoResponse> {
-    // Traemos entrega para nodo root bien descriptivo
     const entrega = await this.entregaRepo.findOne({
       where: { id: entregaId, tenantId },
       relations: ['cliente'],
     });
     if (!entrega) throw new NotFoundException('Entrega no encontrada');
 
-    // 1) Items de entrega + PF + presentación
     const items = await this.entregaItemRepo
       .createQueryBuilder('it')
       .innerJoin('it.entrega', 'e')
@@ -299,6 +436,7 @@ export class TrazabilidadService {
         'pf.estado as pf_estado',
         'pf.cantidadInicialKg as pf_kg_inicial',
         'pf.cantidadActualKg as pf_kg_actual',
+        'pf.fechaProduccion as pf_fecha_produccion',
         'pfProd.nombre as pf_nombre',
         'it.cantidadKg as cantidad_kg',
         'it.cantidadBultos as cantidad_bultos',
@@ -309,7 +447,6 @@ export class TrazabilidadService {
         'e.numeroRemito as numero_remito',
         'e.fecha as entrega_fecha',
       ])
-      // ✅ IMPORTANTE: usar la propiedad del entity (razonSocial) para que TypeORM mapee a razon_social
       .addSelect('cli.razonSocial', 'cliente_nombre')
       .getRawMany<{
         item_id: string;
@@ -318,6 +455,7 @@ export class TrazabilidadService {
         pf_estado: string;
         pf_kg_inicial: string | null;
         pf_kg_actual: string | null;
+        pf_fecha_produccion: any | null;
         pf_nombre: string | null;
         cantidad_kg: string | null;
         cantidad_bultos: string | null;
@@ -327,14 +465,13 @@ export class TrazabilidadService {
         cliente_id: string;
         cliente_nombre: string;
         numero_remito: string;
-        entrega_fecha: string;
+        entrega_fecha: any;
       }>();
 
     if (!items.length) throw new NotFoundException('Entrega sin items');
 
     const pfIds = Array.from(new Set(items.map((i) => i.pf_id)));
 
-    // 2) Para esos PF, buscamos MP consumidas (PF -> Orden -> Consumos -> MP)
     const consumos = await this.consumoRepo
       .createQueryBuilder('c')
       .innerJoin('c.ingrediente', 'ing')
@@ -352,6 +489,7 @@ export class TrazabilidadService {
         'mpMat.nombre as mp_nombre',
         'mp.cantidadInicialKg as mp_kg_inicial',
         'mp.cantidadActualKg as mp_kg_actual',
+        'mp.createdAt as mp_created_at',
         'c.cantidadKg as consumo_kg',
       ])
       .getRawMany<{
@@ -362,10 +500,10 @@ export class TrazabilidadService {
         mp_nombre: string | null;
         mp_kg_inicial: string | null;
         mp_kg_actual: string | null;
+        mp_created_at: any | null;
         consumo_kg: string;
       }>();
 
-    // 3) Armar grafo
     const nodosMap = new Map<string, TrazNodo>();
     const links: TrazLink[] = [];
     const upsertNodo = (n: TrazNodo) => {
@@ -380,6 +518,15 @@ export class TrazabilidadService {
       subtitulo: entrega.fecha ? `Fecha: ${String(entrega.fecha)}` : undefined,
       badge: entrega.cliente?.razonSocial,
       meta: {
+        // normalizado (para root entrega también)
+        normalizado: {
+          clienteNombre: entrega.cliente?.razonSocial ?? null,
+          numeroRemito: entrega.numeroRemito ?? null,
+          fecha: entrega.fecha ?? null,
+          producto: null, // root no es por item
+          cantidad: null,
+        },
+
         numeroRemito: entrega.numeroRemito,
         fecha: entrega.fecha,
         cliente: entrega.cliente
@@ -399,10 +546,9 @@ export class TrazabilidadService {
     };
     upsertNodo(clienteNode);
 
-    // Entrega -> Cliente (útil si tu UI lo quiere explícito)
     links.push({ from: entregaNode.id, to: clienteNode.id });
 
-    // Entrega -> PF (por item)
+    // Entrega(root) -> PF (por item) + ENTREGA(item) normalizado
     for (const it of items) {
       upsertNodo({
         id: nodeId('PF', it.pf_id),
@@ -412,11 +558,20 @@ export class TrazabilidadService {
         subtitulo: `LOT: ${it.pf_codigo}`,
         badge: it.pf_estado,
         meta: {
+          normalizado: normPfNode({
+            nombre: it.pf_nombre ?? null,
+            codigoLote: it.pf_codigo ?? null,
+            stockInicial: Number(it.pf_kg_inicial ?? 0),
+            stockActual: Number(it.pf_kg_actual ?? 0),
+            fechaElaboracion: it.pf_fecha_produccion ?? null,
+          }),
+
           presentacion: it.pres_id
             ? { id: it.pres_id, codigo: it.pres_codigo, nombre: it.pres_nombre }
             : null,
           kgInicial: Number(it.pf_kg_inicial ?? 0),
           kgActual: Number(it.pf_kg_actual ?? 0),
+          fechaProduccion: it.pf_fecha_produccion ?? null,
         },
         col: 'PROD',
       });
@@ -437,26 +592,85 @@ export class TrazabilidadService {
             : null,
         },
       });
+
+      // Nodo ENTREGA normalizado por item
+      const entregaItemNodeId = nodeId('ENTREGA', it.item_id);
+
+      upsertNodo({
+        id: entregaItemNodeId,
+        tipo: 'ENTREGA',
+        refId: it.item_id,
+        titulo: `Entrega ${it.numero_remito}`,
+        subtitulo: it.entrega_fecha
+          ? `Fecha: ${String(it.entrega_fecha)}`
+          : undefined,
+        badge: it.cliente_nombre,
+        meta: {
+          normalizado: {
+            clienteNombre: it.cliente_nombre,
+            numeroRemito: it.numero_remito,
+            fecha: it.entrega_fecha ?? null,
+            producto: fmtProductoEntrega(it.pres_nombre),
+            cantidad: fmtCantidadEntrega({
+              presNombre: it.pres_nombre,
+              bultos,
+              kg,
+            }),
+          },
+          entregaId,
+          itemId: it.item_id,
+          clienteId: it.cliente_id,
+          presentacion: it.pres_id
+            ? { id: it.pres_id, codigo: it.pres_codigo, nombre: it.pres_nombre }
+            : null,
+          cantidadBultos: bultos,
+          cantidadKg: kg,
+        },
+        col: 'FORWARD',
+      });
+
+      // PF -> ENTREGA(item) -> CLIENTE
+      links.push({
+        from: nodeId('PF', it.pf_id),
+        to: entregaItemNodeId,
+        label: fmtEntregaLabel(bultos, kg),
+        meta: { itemId: it.item_id, entregaId },
+      });
+
+      links.push({
+        from: entregaItemNodeId,
+        to: nodeId('CLIENTE', it.cliente_id),
+        meta: { itemId: it.item_id, entregaId },
+      });
     }
 
-    // MP -> PF (consumos, agregados por par PF-MP)
-    const consumoKgPorPfMp = new Map<string, number>(); // key pf|mp
-    const ordenPorPfMp = new Map<string, string>(); // key pf|mp -> ordenId
+    // MP -> PF (consumos agregados por par PF-MP)
+    const consumoKgPorPfMp = new Map<string, number>();
+    const ordenPorPfMp = new Map<string, string>();
 
     for (const c of consumos) {
-      const mpNode: TrazNodo = {
+      const fechaIngreso =
+        (c as any).mp_fecha_ingreso ?? c.mp_created_at ?? null;
+
+      upsertNodo({
         id: nodeId('MP', c.mp_id),
         tipo: 'MP',
         refId: c.mp_id,
         titulo: c.mp_nombre ?? 'Materia prima',
         subtitulo: `LOT: ${c.mp_codigo}`,
         meta: {
+          normalizado: normMpNode({
+            nombre: c.mp_nombre ?? null,
+            codigoLote: c.mp_codigo ?? null,
+            stockInicial: Number(c.mp_kg_inicial ?? 0),
+            stockActual: Number(c.mp_kg_actual ?? 0),
+            fechaIngreso,
+          }),
           kgInicial: Number(c.mp_kg_inicial ?? 0),
           kgActual: Number(c.mp_kg_actual ?? 0),
         },
         col: 'BACKWARD',
-      };
-      upsertNodo(mpNode);
+      });
 
       const kg = Number(c.consumo_kg ?? 0);
       const key = `${c.pf_id}|${c.mp_id}`;
@@ -498,7 +712,6 @@ export class TrazabilidadService {
     });
     if (!pf) throw new NotFoundException('Lote PF no encontrado');
 
-    // 1) Backward: MP consumidas para producir este PF
     const consumos = await this.consumoRepo
       .createQueryBuilder('c')
       .innerJoin('c.ingrediente', 'ing')
@@ -515,6 +728,7 @@ export class TrazabilidadService {
         'mpMat.nombre as mp_nombre',
         'mp.cantidadInicialKg as mp_kg_inicial',
         'mp.cantidadActualKg as mp_kg_actual',
+        'mp.createdAt as mp_created_at',
         'c.cantidadKg as consumo_kg',
       ])
       .getRawMany<{
@@ -524,10 +738,10 @@ export class TrazabilidadService {
         mp_nombre: string | null;
         mp_kg_inicial: string | null;
         mp_kg_actual: string | null;
+        mp_created_at: any | null;
         consumo_kg: string;
       }>();
 
-    // 2) Forward: entregas/items donde se entregó este PF
     const entregas = await this.entregaItemRepo
       .createQueryBuilder('it')
       .innerJoin('it.entrega', 'e')
@@ -542,20 +756,18 @@ export class TrazabilidadService {
         'e.numeroRemito as numero_remito',
         'e.fecha as entrega_fecha',
         'cli.id as cliente_id',
-        // ❌ NO: 'cli.nombre as cliente_nombre'
         'it.cantidadKg as cantidad_kg',
         'it.cantidadBultos as cantidad_bultos',
         'pres.id as pres_id',
         'pres.codigo as pres_codigo',
         'pres.nombre as pres_nombre',
       ])
-      // ✅ IMPORTANTE: usar la propiedad del entity para que TypeORM mapee a razon_social
       .addSelect('cli.razonSocial', 'cliente_nombre')
       .getRawMany<{
         item_id: string;
         entrega_id: string;
         numero_remito: string;
-        entrega_fecha: string;
+        entrega_fecha: any;
         cliente_id: string;
         cliente_nombre: string;
         cantidad_kg: string | null;
@@ -565,7 +777,6 @@ export class TrazabilidadService {
         pres_nombre: string | null;
       }>();
 
-    // 3) Armar grafo
     const nodosMap = new Map<string, TrazNodo>();
     const links: TrazLink[] = [];
     const upsertNodo = (n: TrazNodo) => {
@@ -580,11 +791,20 @@ export class TrazabilidadService {
       subtitulo: `LOT: ${pf.codigoLote}`,
       badge: pf.estado,
       meta: {
+        normalizado: normPfNode({
+          nombre: pf.productoFinal?.nombre ?? null,
+          codigoLote: pf.codigoLote ?? null,
+          stockInicial: Number(pf.cantidadInicialKg ?? 0),
+          stockActual: Number(pf.cantidadActualKg ?? 0),
+          fechaElaboracion:
+            (pf as any).fechaElaboracion ?? pf.fechaProduccion ?? null,
+        }),
+
         deposito: pf.deposito?.nombre,
         fechaProduccion: pf.fechaProduccion,
         fechaVencimiento: pf.fechaVencimiento,
         kgInicial: Number(pf.cantidadInicialKg ?? 0),
-        kgActual: Number(pf.cantidadActualKg),
+        kgActual: Number(pf.cantidadActualKg ?? 0),
       },
       col: 'PROD',
     };
@@ -595,6 +815,9 @@ export class TrazabilidadService {
     const ordenPorMp = new Map<string, string>();
 
     for (const c of consumos) {
+      const fechaIngreso =
+        (c as any).mp_fecha_ingreso ?? c.mp_created_at ?? null;
+
       upsertNodo({
         id: nodeId('MP', c.mp_id),
         tipo: 'MP',
@@ -602,6 +825,14 @@ export class TrazabilidadService {
         titulo: c.mp_nombre ?? 'Materia prima',
         subtitulo: `LOT: ${c.mp_codigo}`,
         meta: {
+          normalizado: normMpNode({
+            nombre: c.mp_nombre ?? null,
+            codigoLote: c.mp_codigo ?? null,
+            stockInicial: Number(c.mp_kg_inicial ?? 0),
+            stockActual: Number(c.mp_kg_actual ?? 0),
+            fechaIngreso,
+          }),
+
           kgInicial: Number(c.mp_kg_inicial ?? 0),
           kgActual: Number(c.mp_kg_actual ?? 0),
         },
@@ -622,7 +853,7 @@ export class TrazabilidadService {
       });
     }
 
-    // Forward PF -> Cliente (con meta entrega)
+    // Forward PF -> Cliente (compat) + PF -> ENTREGA(item) -> CLIENTE (normalizado)
     for (const e of entregas) {
       const clienteNodeId = nodeId('CLIENTE', e.cliente_id);
 
@@ -637,6 +868,7 @@ export class TrazabilidadService {
       const bultos = e.cantidad_bultos ? Number(e.cantidad_bultos) : 0;
       const kg = e.cantidad_kg ? Number(e.cantidad_kg) : 0;
 
+      // Link compat (como estaba)
       links.push({
         from: pfNode.id,
         to: clienteNodeId,
@@ -653,6 +885,55 @@ export class TrazabilidadService {
             : null,
         },
       });
+
+      // Nodo ENTREGA normalizado por item
+      const entregaItemNodeId = nodeId('ENTREGA', e.item_id);
+
+      upsertNodo({
+        id: entregaItemNodeId,
+        tipo: 'ENTREGA',
+        refId: e.item_id,
+        titulo: `Entrega ${e.numero_remito}`,
+        subtitulo: e.entrega_fecha
+          ? `Fecha: ${String(e.entrega_fecha)}`
+          : undefined,
+        badge: e.cliente_nombre,
+        meta: {
+          normalizado: {
+            clienteNombre: e.cliente_nombre,
+            numeroRemito: e.numero_remito,
+            fecha: e.entrega_fecha ?? null,
+            producto: fmtProductoEntrega(e.pres_nombre),
+            cantidad: fmtCantidadEntrega({
+              presNombre: e.pres_nombre,
+              bultos,
+              kg,
+            }),
+          },
+          entregaId: e.entrega_id,
+          itemId: e.item_id,
+          clienteId: e.cliente_id,
+          presentacion: e.pres_id
+            ? { id: e.pres_id, codigo: e.pres_codigo, nombre: e.pres_nombre }
+            : null,
+          cantidadBultos: bultos,
+          cantidadKg: kg,
+        },
+        col: 'FORWARD',
+      });
+
+      links.push({
+        from: pfNode.id,
+        to: entregaItemNodeId,
+        label: fmtEntregaLabel(bultos, kg),
+        meta: { entregaId: e.entrega_id, itemId: e.item_id },
+      });
+
+      links.push({
+        from: entregaItemNodeId,
+        to: clienteNodeId,
+        meta: { entregaId: e.entrega_id, itemId: e.item_id },
+      });
     }
 
     return {
@@ -668,18 +949,15 @@ export class TrazabilidadService {
   }
 
   // =========================================================
-  // BUSCADOR UNIFICADO (id puede ser MP, PF o Entrega)
+  // BUSCADOR UNIFICADO
   // =========================================================
   async buscar(tenantId: string, id: string) {
-    // PF
     const pf = await this.lotePFRepo.findOne({ where: { id, tenantId } });
     if (pf) return { tipo: 'PF', ...(await this.grafoDesdePF(tenantId, id)) };
 
-    // MP
     const mp = await this.loteMPRepo.findOne({ where: { id, tenantId } });
     if (mp) return { tipo: 'MP', ...(await this.grafoDesdeMP(tenantId, id)) };
 
-    // Entrega
     const ent = await this.entregaRepo.findOne({ where: { id, tenantId } });
     if (ent)
       return {

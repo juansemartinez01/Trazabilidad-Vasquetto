@@ -32,6 +32,7 @@ import { FilesModule } from './modules/files/files.module';
 import { TransferenciasModule } from './modules/transferencias/transferencias.module';
 import { EstadisticasModule } from './modules/estadisticas/estadisticas.module';
 import { AdminTenantsModule } from './modules/admin-tenants/admin-tenants.module';
+import { TenantS3Map } from './common/entities/tenant-s3-map.entity';
 
 
 @Module({
@@ -39,6 +40,7 @@ import { AdminTenantsModule } from './modules/admin-tenants/admin-tenants.module
     TypeOrmModule.forRootAsync({
       useFactory: () => typeormConfig,
     }),
+    TypeOrmModule.forFeature([TenantS3Map]),
     AuthModule,
     AuditoriaModule,
     MateriaPrimaModule,
@@ -76,6 +78,5 @@ export class AppModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(UsuarioMiddleware).forRoutes('*');
     consumer.apply(TenantMiddleware).forRoutes('*');
-    
   }
 }

@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LoteMP } from './../lotes/entities/lote-mp.entity';
-import { In, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import {
   StockMovimiento,
   TipoMovimiento,
@@ -17,7 +17,17 @@ import { MateriaPrima } from '../materia-prima/entities/materia-prima.entity';
 import { StockMinimoPF } from '../configuracion/entities/stock-minimo-pf.entity';
 import { StockMinimoMP } from '../configuracion/entities/stock-minimo-mp.entity';
 import { QueryResumenPfDto } from './dto/query-resumen-pf.dto';
+import { QueryMovimientosDto } from './dto/query-movimientos.dto';
 
+function parseTipos(raw?: string): TipoMovimiento[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+    .filter((x) => Object.values(TipoMovimiento).includes(x as TipoMovimiento))
+    .map((x) => x as TipoMovimiento);
+}
 
 
 function parseEstados(raw?: string): LotePfEstado[] {
@@ -643,5 +653,171 @@ export class StockService {
       .sort((a, b) => b.faltanteKg - a.faltanteKg);
 
     return result;
+  }
+
+  async obtenerMovimientos(tenantId: string, q: QueryMovimientosDto) {
+    const page = Math.max(1, Number(q.page ?? 1));
+    const limit = Math.min(Math.max(1, Number(q.limit ?? 50)), 200);
+    const skip = (page - 1) * limit;
+
+    const tipos = [...(q.tipo ? [q.tipo] : []), ...parseTipos(q.tipos)];
+
+    // 1) Query base (sin paginado ni order)
+    const baseQb = this.movRepo
+      .createQueryBuilder('m')
+      .where('m.tenant_id = :tenantId', { tenantId })
+      .leftJoin('m.deposito', 'dep')
+      .leftJoin('m.loteMP', 'mp')
+      .leftJoin('mp.materiaPrima', 'mpMat')
+      .leftJoin('m.lotePF', 'pf')
+      .leftJoin('pf.productoFinal', 'pfProd')
+      .leftJoin('m.presentacion', 'pres');
+
+    // filtros
+    if (tipos.length) baseQb.andWhere('m.tipo IN (:...tipos)', { tipos });
+
+    if (q.depositoId)
+      baseQb.andWhere('dep.id = :depositoId', { depositoId: q.depositoId });
+    if (q.loteMpId)
+      baseQb.andWhere('mp.id = :loteMpId', { loteMpId: q.loteMpId });
+    if (q.lotePfId)
+      baseQb.andWhere('pf.id = :lotePfId', { lotePfId: q.lotePfId });
+
+    if (q.presentacionId) {
+      baseQb.andWhere('pres.id = :presentacionId', {
+        presentacionId: q.presentacionId,
+      });
+    }
+
+    if (q.unidadEnvasadaId) {
+      baseQb.andWhere('m.unidad_envasada_id = :unidadEnvasadaId', {
+        unidadEnvasadaId: q.unidadEnvasadaId,
+      });
+    }
+
+    if (q.referenciaId) {
+      baseQb.andWhere('m.referenciaId = :referenciaId', {
+        referenciaId: q.referenciaId,
+      });
+    }
+
+    if (q.desde) baseQb.andWhere('m.createdAt >= :desde', { desde: q.desde });
+    if (q.hasta) baseQb.andWhere('m.createdAt <= :hasta', { hasta: q.hasta });
+
+    if (q.q) {
+      const like = `%${q.q.trim()}%`;
+      baseQb.andWhere(
+        new Brackets((w) => {
+          w.where('m.motivo ILIKE :like', { like })
+            .orWhere('m.referenciaId ILIKE :like', { like })
+            .orWhere('mp.codigoLote ILIKE :like', { like })
+            .orWhere('pf.codigoLote ILIKE :like', { like })
+            .orWhere('mpMat.nombre ILIKE :like', { like })
+            .orWhere('pfProd.nombre ILIKE :like', { like })
+            .orWhere('dep.nombre ILIKE :like', { like });
+        }),
+      );
+    }
+
+    // 2) Data query (select + order + paginado)
+    const dataQb = baseQb
+      .clone()
+      .select([
+        'm.id as id',
+        'm.createdAt as fecha',
+        'm.tipo as tipo',
+        'm.cantidadKg as cantidadKg',
+        'm.cantidadUnidades as cantidadUnidades',
+        'm.referenciaId as referenciaId',
+        'm.motivo as motivo',
+        'm.responsableId as responsableId',
+
+        'dep.id as depositoId',
+        'dep.nombre as depositoNombre',
+
+        'mp.id as loteMpId',
+        'mp.codigoLote as loteMpCodigo',
+        'mpMat.id as materiaPrimaId',
+        'mpMat.nombre as materiaPrimaNombre',
+
+        'pf.id as lotePfId',
+        'pf.codigoLote as lotePfCodigo',
+        'pfProd.id as productoFinalId',
+        'pfProd.nombre as productoFinalNombre',
+
+        'pres.id as presentacionId',
+        'pres.nombre as presentacionNombre',
+
+        'm.unidad_envasada_id as unidadEnvasadaId',
+      ])
+      .orderBy('m.createdAt', q.order ?? 'DESC')
+      .offset(skip)
+      .limit(limit);
+
+    // 3) Count query (sin select custom, sin order/paginado)
+    const countQb = baseQb.clone();
+    countQb.expressionMap.orderBys = {};
+    countQb.expressionMap.skip = undefined;
+    countQb.expressionMap.take = undefined;
+    countQb.expressionMap.limit = undefined;
+    countQb.expressionMap.offset = undefined;
+
+    // Si algún día agregás joins que multiplican filas, cambiá a DISTINCT:
+    // const total = await countQb.select('m.id').distinct(true).getCount();
+
+    const [rows, total] = await Promise.all([
+      dataQb.getRawMany(),
+      countQb.getCount(),
+    ]);
+
+    const items = rows.map((r) => ({
+      id: r.id,
+      fecha: r.fecha,
+      tipo: r.tipo,
+      cantidadKg: Number(r.cantidadKg ?? 0),
+      cantidadUnidades:
+        r.cantidadUnidades != null ? Number(r.cantidadUnidades) : null,
+      referenciaId: r.referenciaId ?? null,
+      motivo: r.motivo ?? null,
+      responsableId: r.responsableId ?? null,
+
+      deposito: r.depositoId
+        ? { id: r.depositoId, nombre: r.depositoNombre }
+        : null,
+
+      loteMP: r.loteMpId
+        ? {
+            id: r.loteMpId,
+            codigoLote: r.loteMpCodigo,
+            materiaPrima: r.materiaPrimaId
+              ? { id: r.materiaPrimaId, nombre: r.materiaPrimaNombre }
+              : null,
+          }
+        : null,
+
+      lotePF: r.lotePfId
+        ? {
+            id: r.lotePfId,
+            codigoLote: r.lotePfCodigo,
+            productoFinal: r.productoFinalId
+              ? { id: r.productoFinalId, nombre: r.productoFinalNombre }
+              : null,
+          }
+        : null,
+
+      presentacion: r.presentacionId
+        ? { id: r.presentacionId, nombre: r.presentacionNombre }
+        : null,
+
+      unidadEnvasadaId: r.unidadEnvasadaId ?? null,
+    }));
+
+    return {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      items,
+    };
   }
 }

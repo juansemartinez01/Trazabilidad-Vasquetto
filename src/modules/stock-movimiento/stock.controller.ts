@@ -4,6 +4,7 @@ import { TipoMovimiento } from './entities/stock-movimiento.entity';
 import { AuthGuard } from './../auth/guards/auth.guard';
 import { RegistrarMermaDto } from './dto/registrar-merma.dto';
 import { QueryResumenPfDto } from './dto/query-resumen-pf.dto';
+import { QueryMovimientosDto } from './dto/query-movimientos.dto';
 
 @Controller('stock')
 @UseGuards(AuthGuard)
@@ -13,6 +14,11 @@ export class StockController {
   @Get('alertas')
   alertas(@Req() req) {
     return this.service.alertasStock(req.tenantId);
+  }
+
+  @Get('movimientos')
+  movimientos(@Req() req, @Query() q: QueryMovimientosDto) {
+    return this.service.obtenerMovimientos(req.tenantId, q);
   }
 
   // 🔹 NUEVO: resumen stock materias primas

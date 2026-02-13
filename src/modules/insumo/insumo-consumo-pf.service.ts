@@ -399,7 +399,7 @@ export class InsumoConsumoPfService {
     };
   }
 
-  async listarPresentacionesSinReglas(
+  async listarPaginadoSinReglas(
     tenantId: string,
     query: QueryInsumoConsumoPfDto,
   ) {
@@ -407,12 +407,11 @@ export class InsumoConsumoPfService {
     const limit = Math.min(200, Math.max(1, Number(query.limit ?? 50)));
     const skip = (page - 1) * limit;
 
+    // Traigo presentaciones del tenant que NO tienen ninguna regla en insumo_consumo_pf
     const qb = this.presRepo
       .createQueryBuilder('pres')
-      .leftJoinAndSelect('pres.productoFinal', 'pf')
+      .innerJoin('pres.productoFinal', 'pf')
       .where('pres.tenant_id = :tenantId', { tenantId })
-
-      // ✅ NOT EXISTS: no hay ninguna regla para esa presentacion
       .andWhere(
         `NOT EXISTS (
         SELECT 1
@@ -424,12 +423,10 @@ export class InsumoConsumoPfService {
       );
 
     // filtros aplicables
-    if (query.presentacionId) {
+    if (query.presentacionId)
       qb.andWhere('pres.id = :presId', { presId: query.presentacionId });
-    }
-    if (query.productoFinalId) {
+    if (query.productoFinalId)
       qb.andWhere('pf.id = :pfId', { pfId: query.productoFinalId });
-    }
 
     const q = query.q?.trim();
     if (q) {
@@ -443,12 +440,83 @@ export class InsumoConsumoPfService {
       );
     }
 
-    // orden (mismo query.order)
-    const order = (query.order ?? 'DESC') === 'ASC' ? 'ASC' : 'DESC';
-    // si querés ordenar por createdAt de la presentación:
-    qb.orderBy('pres.createdAt', order);
+    // select “plano” (raw) para controlar salida exacta
+    qb.select([
+      'pres.id as pres_id',
+      'pres.created_at as pres_created_at',
+      'pres.nombre as pres_nombre',
+      'pf.id as pf_id',
+      'pf.nombre as pf_nombre',
+    ]);
 
-    const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
+    const order = (query.order ?? 'DESC') === 'ASC' ? 'ASC' : 'DESC';
+    qb.orderBy('pres.created_at', order);
+
+    const [rawItems, total] = (await qb.offset(skip).limit(limit)
+      .getManyAndCount)
+      ? await (async () => {
+          const items = await qb.getRawMany<{
+            pres_id: string;
+            pres_created_at: string;
+            pres_nombre: string;
+            pf_id: string;
+            pf_nombre: string;
+          }>();
+
+          // para el total, clono query sin paginado y hago COUNT(*)
+          const total = await this.presRepo
+            .createQueryBuilder('pres')
+            .innerJoin('pres.productoFinal', 'pf')
+            .where('pres.tenant_id = :tenantId', { tenantId })
+            .andWhere(
+              `NOT EXISTS (
+              SELECT 1 FROM insumo_consumo_pf r
+              WHERE r.tenant_id = :tenantId AND r.presentacion_id = pres.id
+            )`,
+              { tenantId },
+            )
+            .andWhere(query.presentacionId ? 'pres.id = :presId' : '1=1', {
+              presId: query.presentacionId,
+            })
+            .andWhere(query.productoFinalId ? 'pf.id = :pfId' : '1=1', {
+              pfId: query.productoFinalId,
+            })
+            .andWhere(
+              q ? `(pres.nombre ILIKE :q OR pf.nombre ILIKE :q)` : '1=1',
+              q ? { q: `%${q}%` } : {},
+            )
+            .getCount();
+
+          return [items, total] as const;
+        })()
+      : ([[], 0] as const);
+
+    // ✅ Mapear a “Regla virtual” con el shape exacto
+    const items = rawItems.map((r) => ({
+      id: r.pres_id, // 👈 importante: usamos el id de la presentación
+      createdAt: r.pres_created_at, // 👈 createdAt de la presentación
+
+      insumo: null,
+      insumoId: null,
+
+      productoFinal: {
+        id: r.pf_id,
+        nombre: r.pf_nombre,
+      },
+      productoFinalId: r.pf_id,
+
+      presentacion: {
+        id: r.pres_id,
+        nombre: r.pres_nombre,
+      },
+      presentacionId: r.pres_id,
+
+      cantidadPorUnidad: null,
+      cantidadPorKg: null,
+
+      activo: true, // o pres.activa si querés, pero entonces hay que traerla
+      esEnvase: false,
+    }));
 
     return {
       page,

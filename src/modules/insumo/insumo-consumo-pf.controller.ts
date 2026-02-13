@@ -25,12 +25,9 @@ export class InsumoConsumoPfController {
   constructor(private service: InsumoConsumoPfService) {}
 
   // GET /insumos/consumos-pf/presentaciones-sin-reglas
-  @Get('presentaciones-sin-reglas')
-  listarPresentacionesSinReglas(
-    @Req() req,
-    @Query() query: QueryInsumoConsumoPfDto,
-  ) {
-    return this.service.listarPresentacionesSinReglas(req.tenantId, query);
+  @Get('paginado-sin-reglas')
+  listarPaginadoSinReglas(@Req() req, @Query() query: QueryInsumoConsumoPfDto) {
+    return this.service.listarPaginadoSinReglas(req.tenantId, query);
   }
 
   @Get('paginado')

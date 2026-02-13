@@ -4,12 +4,14 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { TransferenciasService } from './transferencias.service';
 import { CreateTransferenciaDto } from './dto/create-transferencia.dto';
+import { QueryTransferenciasDto } from './dto/query-transferencias.dto';
 
 @Controller('transferencias')
 @UseGuards(AuthGuard)
@@ -27,8 +29,8 @@ export class TransferenciasController {
   }
 
   @Get()
-  listar(@Req() req) {
-    return this.service.listar(req.tenantId);
+  listar(@Req() req, @Query() q: QueryTransferenciasDto) {
+    return this.service.listar(req.tenantId, q);
   }
 
   @Get(':id')

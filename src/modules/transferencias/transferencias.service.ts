@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Brackets, DataSource, Repository } from 'typeorm';
 
 import {
   Transferencia,
@@ -33,6 +33,7 @@ import {
   StockMovimiento,
   TipoMovimiento,
 } from '../stock-movimiento/entities/stock-movimiento.entity';
+import { QueryTransferenciasDto } from './dto/query-transferencias.dto';
 
 function dec(n: any) {
   const v = Number(n);
@@ -194,12 +195,223 @@ export class TransferenciasService {
     });
   }
 
-  listar(tenantId: string) {
-    return this.repo.find({
-      where: { tenantId },
-      order: { createdAt: 'DESC' as any },
-      relations: ['origenDeposito', 'destinoDeposito'],
-    });
+  async listar(tenantId: string, q: QueryTransferenciasDto) {
+    const page = Number(q.page ?? 1);
+    const limit = Math.min(Number(q.limit ?? 50), 200);
+    const skip = (page - 1) * limit;
+
+    if (q.desde && q.hasta && q.desde > q.hasta) {
+      throw new BadRequestException('desde no puede ser mayor que hasta');
+    }
+
+    const qb = this.repo
+      .createQueryBuilder('t')
+      .where('t.tenant_id = :tenantId', { tenantId })
+
+      // joins principales
+      .leftJoinAndSelect('t.origenDeposito', 'origen')
+      .leftJoinAndSelect('t.destinoDeposito', 'destino')
+      .leftJoinAndSelect('t.responsable', 'resp')
+
+      // ✅ traer items
+      .leftJoinAndSelect('t.items', 'it')
+      .leftJoinAndSelect('it.loteMp', 'itLoteMp')
+      .leftJoinAndSelect('it.lotePf', 'itLotePf')
+      .leftJoinAndSelect('it.presentacion', 'itPres')
+      .leftJoinAndSelect('it.lotePfOrigen', 'itLotePfOri')
+
+      // ✅ traer unidades (si es PF_ENVASADO)
+      .leftJoinAndSelect('t.unidades', 'tu')
+      .leftJoinAndSelect('tu.unidad', 'unidad')
+      .leftJoinAndSelect('unidad.loteOrigen', 'unidadLoteOrigen')
+      .leftJoinAndSelect('unidad.presentacion', 'unidadPres')
+      .leftJoinAndSelect('unidad.deposito', 'unidadDep');
+
+    // ==========================
+    // Filtros directos (cabecera)
+    // ==========================
+    if (q.tipo) qb.andWhere('t.tipo = :tipo', { tipo: q.tipo });
+    if (q.estado) qb.andWhere('t.estado = :estado', { estado: q.estado });
+    if (q.origenDepositoId)
+      qb.andWhere('origen.id = :oid', { oid: q.origenDepositoId });
+    if (q.destinoDepositoId)
+      qb.andWhere('destino.id = :did', { did: q.destinoDepositoId });
+    if (q.responsableId)
+      qb.andWhere('resp.id = :rid', { rid: q.responsableId });
+
+    // rango por fecha de negocio (t.fecha, type=date)
+    if (q.desde) qb.andWhere('t.fecha >= :desde', { desde: q.desde });
+    if (q.hasta) qb.andWhere('t.fecha <= :hasta', { hasta: q.hasta });
+
+    // ==========================
+    // Filtros por ítems
+    // (requieren que exista al menos un item que cumpla)
+    // ==========================
+    if (q.loteMpId) qb.andWhere('itLoteMp.id = :lmp', { lmp: q.loteMpId });
+    if (q.lotePfId) qb.andWhere('itLotePf.id = :lpf', { lpf: q.lotePfId });
+    if (q.presentacionId)
+      qb.andWhere('itPres.id = :pid', { pid: q.presentacionId });
+    if (q.lotePfOrigenId)
+      qb.andWhere('itLotePfOri.id = :lpo', { lpo: q.lotePfOrigenId });
+
+    // ==========================
+    // Búsqueda libre
+    // ==========================
+    if (q.q && q.q.trim().length) {
+      const term = `%${q.q.trim()}%`;
+      qb.andWhere(
+        new Brackets((b) => {
+          b.where('t.observaciones ILIKE :term', { term })
+            .orWhere('it.descripcion ILIKE :term', { term })
+
+            // códigos de lotes (si existen en esas entidades)
+            .orWhere('itLoteMp.codigoLote ILIKE :term', { term })
+            .orWhere('itLotePf.codigoLote ILIKE :term', { term })
+            .orWhere('itLotePfOri.codigoLote ILIKE :term', { term })
+
+            // código etiqueta de unidad envasada
+            .orWhere('unidad.codigoEtiqueta ILIKE :term', { term });
+        }),
+      );
+    }
+
+    // ==========================
+    // Orden
+    // ==========================
+    const sortBy = q.sortBy ?? 'createdAt';
+    const sortDir = (q.sortDir ?? 'DESC').toUpperCase() as 'ASC' | 'DESC';
+
+    if (sortBy === 'fecha') {
+      qb.orderBy('t.fecha', sortDir);
+    } else {
+      qb.orderBy('t.createdAt', sortDir);
+    }
+
+    // para que sea estable con joins
+    qb.addOrderBy('t.id', 'DESC');
+
+    // ==========================
+    // Paginado
+    // ⚠️ Con joins 1-N, getManyAndCount cuenta duplicados.
+    // Solución: paginar por IDs (2 pasos).
+    // ==========================
+    const idsQb = this.repo
+      .createQueryBuilder('t')
+      .select('t.id', 'id')
+      .where('t.tenant_id = :tenantId', { tenantId });
+
+    // replicar los mismos filtros en el idsQb (sin joins pesados)
+    if (q.tipo) idsQb.andWhere('t.tipo = :tipo', { tipo: q.tipo });
+    if (q.estado) idsQb.andWhere('t.estado = :estado', { estado: q.estado });
+    if (q.desde) idsQb.andWhere('t.fecha >= :desde', { desde: q.desde });
+    if (q.hasta) idsQb.andWhere('t.fecha <= :hasta', { hasta: q.hasta });
+
+    if (q.origenDepositoId) {
+      idsQb
+        .leftJoin('t.origenDeposito', 'origen')
+        .andWhere('origen.id = :oid', { oid: q.origenDepositoId });
+    }
+    if (q.destinoDepositoId) {
+      idsQb
+        .leftJoin('t.destinoDeposito', 'destino')
+        .andWhere('destino.id = :did', { did: q.destinoDepositoId });
+    }
+    if (q.responsableId) {
+      idsQb
+        .leftJoin('t.responsable', 'resp')
+        .andWhere('resp.id = :rid', { rid: q.responsableId });
+    }
+
+    // filtros por items → EXISTS (sin traer todo)
+    if (
+      q.loteMpId ||
+      q.lotePfId ||
+      q.presentacionId ||
+      q.lotePfOrigenId ||
+      (q.q && q.q.trim().length)
+    ) {
+      idsQb.andWhere(
+        new Brackets((b) => {
+          // EXISTS items
+          const term = q.q?.trim()?.length ? `%${q.q.trim()}%` : null;
+
+          b.where(
+            `EXISTS (
+              SELECT 1
+              FROM transferencia_items itx
+              WHERE itx.tenant_id = t.tenant_id
+                AND itx.transferencia_id = t.id
+                ${q.loteMpId ? 'AND itx.lote_mp_id = :lmp' : ''}
+                ${q.lotePfId ? 'AND itx.lote_pf_id = :lpf' : ''}
+                ${q.presentacionId ? 'AND itx.presentacion_id = :pid' : ''}
+                ${q.lotePfOrigenId ? 'AND itx.lote_pf_origen_id = :lpo' : ''}
+                ${
+                  term
+                    ? `AND (
+                        itx.descripcion ILIKE :term
+                        OR EXISTS (SELECT 1 FROM lotes_mp lmp WHERE lmp.id = itx.lote_mp_id AND lmp.codigo_lote ILIKE :term)
+                        OR EXISTS (SELECT 1 FROM lotes_pf lpf WHERE lpf.id = itx.lote_pf_id AND lpf.codigo_lote ILIKE :term)
+                        OR EXISTS (SELECT 1 FROM lotes_pf lpo WHERE lpo.id = itx.lote_pf_origen_id AND lpo.codigo_lote ILIKE :term)
+                      )`
+                    : ''
+                }
+            )`,
+          );
+
+          // OR buscar en unidades
+          if (term) {
+            b.orWhere(
+              `EXISTS (
+                SELECT 1
+                FROM transferencia_unidades tux
+                JOIN pf_unidades_envasadas u ON u.id = tux.unidad_id
+                WHERE tux.tenant_id = t.tenant_id
+                  AND tux.transferencia_id = t.id
+                  AND u.codigo_etiqueta ILIKE :term
+              )`,
+            );
+          }
+        }),
+      );
+
+      if (q.loteMpId) idsQb.setParameter('lmp', q.loteMpId);
+      if (q.lotePfId) idsQb.setParameter('lpf', q.lotePfId);
+      if (q.presentacionId) idsQb.setParameter('pid', q.presentacionId);
+      if (q.lotePfOrigenId) idsQb.setParameter('lpo', q.lotePfOrigenId);
+      if (q.q && q.q.trim().length)
+        idsQb.setParameter('term', `%${q.q.trim()}%`);
+    }
+
+    if (sortBy === 'fecha') idsQb.orderBy('t.fecha', sortDir);
+    else idsQb.orderBy('t.created_at', sortDir); // idsQb es "raw", ok
+    idsQb.addOrderBy('t.id', 'DESC');
+
+    const total = await idsQb.getCount();
+
+    const ids = (await idsQb.offset(skip).limit(limit).getRawMany()) as {
+      id: string;
+    }[];
+    const idList = ids.map((r) => r.id);
+
+    if (!idList.length) {
+      return { page, limit, total, items: [] };
+    }
+
+    // traer data completa (con joins) para esos ids
+    qb.andWhere('t.id IN (:...ids)', { ids: idList });
+
+    // mantener el orden del paginado
+    // Postgres: ORDER BY array_position
+    qb.orderBy(`array_position(ARRAY[:...ids]::uuid[], t.id)`, 'ASC');
+
+    const data = await qb.getMany();
+
+    return {
+      page,
+      limit,
+      total,
+      items: data,
+    };
   }
 
   // =========================
@@ -584,7 +796,6 @@ export class TransferenciasService {
             .take(cant)
             .getMany();
 
-
           if (unidades.length < cant) {
             const extra = it.lotePfOrigen?.id
               ? ` para el lote ${it.lotePfOrigen.id}`
@@ -593,7 +804,6 @@ export class TransferenciasService {
               `Stock insuficiente de unidades envasadas${extra} (req ${cant}, disp ${unidades.length})`,
             );
           }
-
 
           // mover unidades: cambia depósito
           for (const u of unidades) {
@@ -724,9 +934,6 @@ export class TransferenciasService {
               }),
             );
           }
-
-          
-
 
           it.presentacion = pres;
           it.cantidadUnidades = cant;

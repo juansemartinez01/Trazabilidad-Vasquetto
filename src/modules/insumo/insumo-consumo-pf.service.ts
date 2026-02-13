@@ -398,4 +398,64 @@ export class InsumoConsumoPfService {
       items,
     };
   }
+
+  async listarPresentacionesSinReglas(
+    tenantId: string,
+    query: QueryInsumoConsumoPfDto,
+  ) {
+    const page = Number(query.page ?? 1);
+    const limit = Math.min(200, Math.max(1, Number(query.limit ?? 50)));
+    const skip = (page - 1) * limit;
+
+    const qb = this.presRepo
+      .createQueryBuilder('pres')
+      .leftJoinAndSelect('pres.productoFinal', 'pf')
+      .where('pres.tenant_id = :tenantId', { tenantId })
+
+      // ✅ NOT EXISTS: no hay ninguna regla para esa presentacion
+      .andWhere(
+        `NOT EXISTS (
+        SELECT 1
+        FROM insumo_consumo_pf r
+        WHERE r.tenant_id = :tenantId
+          AND r.presentacion_id = pres.id
+      )`,
+        { tenantId },
+      );
+
+    // filtros aplicables
+    if (query.presentacionId) {
+      qb.andWhere('pres.id = :presId', { presId: query.presentacionId });
+    }
+    if (query.productoFinalId) {
+      qb.andWhere('pf.id = :pfId', { pfId: query.productoFinalId });
+    }
+
+    const q = query.q?.trim();
+    if (q) {
+      qb.andWhere(
+        new Brackets((b) => {
+          b.where('pres.nombre ILIKE :q', { q: `%${q}%` }).orWhere(
+            'pf.nombre ILIKE :q',
+            { q: `%${q}%` },
+          );
+        }),
+      );
+    }
+
+    // orden (mismo query.order)
+    const order = (query.order ?? 'DESC') === 'ASC' ? 'ASC' : 'DESC';
+    // si querés ordenar por createdAt de la presentación:
+    qb.orderBy('pres.createdAt', order);
+
+    const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    return {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      items,
+    };
+  }
 }

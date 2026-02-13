@@ -29,6 +29,11 @@ export class CreateTransferenciaItemDto {
   @IsUUID()
   presentacionId?: string;
 
+  // ✅ NUEVO: restringir PF_ENVASADO a un lote origen específico
+  @IsOptional()
+  @IsUUID()
+  lotePfOrigenId?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsNumber()

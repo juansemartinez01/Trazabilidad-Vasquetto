@@ -27,6 +27,12 @@ export class TransferenciaItem extends TenantBaseEntity {
   @JoinColumn({ name: 'presentacion_id' })
   presentacion?: PresentacionProductoFinal | null;
 
+  // dentro de TransferenciaItem
+
+  @ManyToOne(() => LoteProductoFinal, { eager: true, nullable: true })
+  @JoinColumn({ name: 'lote_pf_origen_id' })
+  lotePfOrigen?: LoteProductoFinal | null;
+
   @Column('decimal', { nullable: true })
   cantidadKg?: number | null;
 

@@ -125,16 +125,21 @@ export class TransferenciasService {
       if (dto.tipo === TransferenciaTipo.PF_ENVASADO) {
         if (!it.presentacionId)
           throw new BadRequestException('PF_ENVASADO requiere presentacionId');
+
+        // ✅ ahora SOLO prohibimos MP / PF granel
         if (it.loteMpId || it.lotePfId)
           throw new BadRequestException(
             'Item PF_ENVASADO no puede incluir loteMpId/lotePfId',
           );
+
         const cant = Number(it.cantidadUnidades ?? 0);
         if (!Number.isFinite(cant) || cant <= 0) {
           throw new BadRequestException(
             'PF_ENVASADO requiere cantidadUnidades > 0',
           );
         }
+
+        // ✅ opcional: si viene lotePfOrigenId, lo validamos como UUID ya lo hace class-validator
       }
     }
 
@@ -167,6 +172,9 @@ export class TransferenciasService {
         lotePf: it.lotePfId ? ({ id: it.lotePfId } as any) : null,
         presentacion: it.presentacionId
           ? ({ id: it.presentacionId } as any)
+          : null,
+        lotePfOrigen: it.lotePfOrigenId
+          ? ({ id: it.lotePfOrigenId } as any)
           : null,
       }),
     );
@@ -554,25 +562,38 @@ export class TransferenciasService {
             );
           }
 
-          const unidades = await unidadRepo
+          const qb = unidadRepo
             .createQueryBuilder('u')
             .setLock('pessimistic_write')
             .innerJoinAndSelect('u.loteOrigen', 'l')
             .where('u.tenant_id = :tenantId', { tenantId })
             .andWhere('u.presentacion_id = :pid', { pid: pres.id })
             .andWhere('u.deposito_id = :did', { did: origen.id })
-            .andWhere('u.estado = :estado', { estado: 'DISPONIBLE' })
+            .andWhere('u.estado = :estado', { estado: 'DISPONIBLE' });
+
+          if (it.lotePfOrigen?.id) {
+            qb.andWhere('u.lote_pf_origen_id = :loteId', {
+              loteId: it.lotePfOrigen.id,
+            });
+          }
+
+          const unidades = await qb
             .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
             .addOrderBy('l.fecha_produccion', 'ASC')
             .addOrderBy('u.created_at', 'ASC')
             .take(cant)
             .getMany();
 
+
           if (unidades.length < cant) {
+            const extra = it.lotePfOrigen?.id
+              ? ` para el lote ${it.lotePfOrigen.id}`
+              : '';
             throw new BadRequestException(
-              `Stock insuficiente de unidades envasadas (req ${cant}, disp ${unidades.length})`,
+              `Stock insuficiente de unidades envasadas${extra} (req ${cant}, disp ${unidades.length})`,
             );
           }
+
 
           // mover unidades: cambia depósito
           for (const u of unidades) {
@@ -660,26 +681,24 @@ export class TransferenciasService {
 
           await stockPresRepo.save([stockOrigen, stockDestino]);
 
-          const peso = dec(
-            (unidades[0] as any)?.pesoKg ?? pres.pesoPorUnidadKg,
-          );
-          const kgTotal = peso * cant;
+          let kgTotal = 0;
+          const mapKg = new Map<string, { unidades: number; kg: number }>();
 
-          // agrupar por loteOrigen (validando null)
-          const map = new Map<string, number>();
           for (const u of unidades) {
             const lid = (u.loteOrigen as any)?.id;
-            if (!lid) {
-              throw new BadRequestException(
-                'Unidad envasada sin loteOrigen (datos inconsistentes)',
-              );
-            }
-            map.set(lid, (map.get(lid) ?? 0) + 1);
+            if (!lid)
+              throw new BadRequestException('Unidad envasada sin loteOrigen');
+
+            const w = dec((u as any).pesoKg ?? pres.pesoPorUnidadKg);
+            kgTotal += w;
+
+            const cur = mapKg.get(lid) ?? { unidades: 0, kg: 0 };
+            cur.unidades += 1;
+            cur.kg += w;
+            mapKg.set(lid, cur);
           }
 
-          for (const [loteId, unidadesCant] of map.entries()) {
-            const kg = unidadesCant * peso;
-
+          for (const [loteId, info] of mapKg.entries()) {
             await movRepo.save(
               movRepo.create({
                 tenantId,
@@ -687,12 +706,11 @@ export class TransferenciasService {
                 lotePF: { id: loteId } as any,
                 deposito: { id: origen.id } as any,
                 presentacion: { id: pres.id } as any,
-                cantidadKg: -kg,
-                cantidadUnidades: unidadesCant,
+                cantidadKg: -info.kg,
+                cantidadUnidades: info.unidades,
                 referenciaId: t.id,
               }),
             );
-
             await movRepo.save(
               movRepo.create({
                 tenantId,
@@ -700,12 +718,15 @@ export class TransferenciasService {
                 lotePF: { id: loteId } as any,
                 deposito: { id: destino.id } as any,
                 presentacion: { id: pres.id } as any,
-                cantidadKg: +kg,
-                cantidadUnidades: unidadesCant,
+                cantidadKg: +info.kg,
+                cantidadUnidades: info.unidades,
                 referenciaId: t.id,
               }),
             );
           }
+
+          
+
 
           it.presentacion = pres;
           it.cantidadUnidades = cant;

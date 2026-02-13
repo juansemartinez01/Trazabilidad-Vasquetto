@@ -17,12 +17,11 @@ import { CreateInsumoDto } from './dto/create-insumo.dto';
 import { UpdateInsumoDto } from './dto/update-insumo.dto';
 import { AjusteStockDto, MovimientoStockDto } from './dto/movimiento-stock.dto';
 import { QueryMovimientosInsumoDto } from './dto/query-movimientos-insumo.dto';
+import { QueryInsumosDto } from './dto/query-insumos.dto';
 
 @Controller('insumos')
 export class InsumoController {
   constructor(private service: InsumoService) {}
-
-  
 
   @UseGuards(AuthGuard)
   @Get('minimos/bajo')
@@ -35,6 +34,12 @@ export class InsumoController {
   @Get('movimientos')
   movimientosGlobal(@Req() req, @Query() query: QueryMovimientosInsumoDto) {
     return this.service.listarMovimientosPaginado(req.tenantId, query);
+  }
+
+  // ✅ nuevo: paginado + filtros
+  @Get('paginado')
+  listarPaginado(@Req() req, @Query() query: QueryInsumosDto) {
+    return this.service.listarPaginado(req.tenantId, query);
   }
 
   @UseGuards(AuthGuard)

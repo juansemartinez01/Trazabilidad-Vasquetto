@@ -4,13 +4,14 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Brackets, DataSource, Repository } from 'typeorm';
 import { Insumo } from './entities/insumo.entity';
 import { CreateInsumoDto } from './dto/create-insumo.dto';
 import { UpdateInsumoDto } from './dto/update-insumo.dto';
 import { InsumoMovimiento, TipoMovimientoInsumo } from './entities/insumo-movimiento.entity';
 import { AjusteStockDto, MovimientoStockDto } from './dto/movimiento-stock.dto';
 import { QueryMovimientosInsumoDto } from './dto/query-movimientos-insumo.dto';
+import { QueryInsumosDto } from './dto/query-insumos.dto';
 
 @Injectable()
 export class InsumoService {
@@ -26,6 +27,79 @@ export class InsumoService {
       where: { tenantId },
       order: { nombre: 'ASC' },
     });
+  }
+
+  async listarPaginado(tenantId: string, query: QueryInsumosDto) {
+    const page = Number(query.page ?? 1);
+    const limit = Math.min(200, Math.max(1, Number(query.limit ?? 50)));
+    const skip = (page - 1) * limit;
+
+    const qb = this.repo
+      .createQueryBuilder('i')
+      .where('i.tenant_id = :tenantId', { tenantId });
+
+    // búsqueda
+    const q = query.q?.trim();
+    if (q) {
+      qb.andWhere(
+        new Brackets((b) => {
+          b.where('i.nombre ILIKE :q', { q: `%${q}%` }).orWhere(
+            'i.unidad ILIKE :q',
+            { q: `%${q}%` },
+          );
+        }),
+      );
+    }
+
+    // filtros exactos
+    if (query.unidad)
+      qb.andWhere('i.unidad = :unidad', { unidad: query.unidad });
+    if (query.esEnvase !== undefined)
+      qb.andWhere('i.es_envase = :esEnvase', { esEnvase: query.esEnvase });
+
+    // filtros por stock
+    if (query.soloConStock) {
+      qb.andWhere('COALESCE(i.stock_actual, 0) > 0');
+    }
+    if (query.soloBajoMinimo) {
+      qb.andWhere('i.stock_minimo IS NOT NULL');
+      qb.andWhere('COALESCE(i.stock_actual, 0) < i.stock_minimo');
+    }
+
+    // orden seguro
+    const sortByMap: Record<string, string> = {
+      nombre: 'i.nombre',
+      unidad: 'i.unidad',
+      stockActual: 'i.stock_actual',
+      stockMinimo: 'i.stock_minimo',
+      createdAt: 'i.created_at',
+    };
+
+    const sortBy = sortByMap[query.sortBy ?? 'nombre'] ?? 'i.nombre';
+    const sortDir = (query.sortDir ?? 'ASC') === 'DESC' ? 'DESC' : 'ASC';
+
+    qb.orderBy(sortBy, sortDir as any);
+
+    // select liviano (si querés full entity, sacá el select)
+    qb.select([
+      'i.id',
+      'i.createdAt',
+      'i.nombre',
+      'i.unidad',
+      'i.stockActual',
+      'i.stockMinimo',
+      'i.esEnvase',
+    ]);
+
+    const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    return {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      items,
+    };
   }
 
   async insumosBajoMinimo(tenantId: string) {

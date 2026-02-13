@@ -578,9 +578,9 @@ export class TransferenciasService {
           }
 
           const unidades = await qb
-            .orderBy('l.fecha_vencimiento', 'ASC', 'NULLS LAST')
-            .addOrderBy('l.fecha_produccion', 'ASC')
-            .addOrderBy('u.created_at', 'ASC')
+            .orderBy('l.fechaVencimiento', 'ASC', 'NULLS LAST')
+            .addOrderBy('l.fechaProduccion', 'ASC')
+            .addOrderBy('u.createdAt', 'ASC')
             .take(cant)
             .getMany();
 

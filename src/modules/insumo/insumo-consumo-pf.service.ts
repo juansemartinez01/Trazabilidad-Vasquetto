@@ -412,6 +412,7 @@ export class InsumoConsumoPfService {
       .createQueryBuilder('pres')
       .innerJoin('pres.productoFinal', 'pf')
       .where('pres.tenant_id = :tenantId', { tenantId })
+      .andWhere('pres.unidad_venta = :uv', { uv: 'BULTO' })
       .andWhere(
         `NOT EXISTS (
         SELECT 1
@@ -468,6 +469,7 @@ export class InsumoConsumoPfService {
             .createQueryBuilder('pres')
             .innerJoin('pres.productoFinal', 'pf')
             .where('pres.tenant_id = :tenantId', { tenantId })
+            .andWhere('pres.unidad_venta = :uv', { uv: 'BULTO' })
             .andWhere(
               `NOT EXISTS (
               SELECT 1 FROM insumo_consumo_pf r

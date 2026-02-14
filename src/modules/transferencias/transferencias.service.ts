@@ -220,6 +220,12 @@ export class TransferenciasService {
       .leftJoinAndSelect('it.presentacion', 'itPres')
       .leftJoinAndSelect('it.lotePfOrigen', 'itLotePfOri')
 
+      // ✅ agregá estos:
+      .leftJoinAndSelect('itLoteMp.materiaPrima', 'mpMat') // MP -> nombre MP
+      .leftJoinAndSelect('itLotePf.productoFinal', 'pfProd') // PF granel -> nombre PF
+      .leftJoinAndSelect('itLotePfOri.productoFinal', 'pfOriProd') // PF origen -> nombre PF (si lo usás)
+      .leftJoinAndSelect('itPres.productoFinal', 'presPf') // PF envasado -> nombre PF
+
       // ✅ traer unidades (si es PF_ENVASADO)
       .leftJoinAndSelect('t.unidades', 'tu')
       .leftJoinAndSelect('tu.unidad', 'unidad')

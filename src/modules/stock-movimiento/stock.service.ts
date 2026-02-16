@@ -723,36 +723,37 @@ export class StockService {
     const dataQb = baseQb
       .clone()
       .select([
-        'm.id as id',
-        'm.createdAt as fecha',
-        'm.tipo as tipo',
-        'm.cantidadKg as cantidadKg',
-        'm.cantidadUnidades as cantidadUnidades',
-        'm.referenciaId as referenciaId',
-        'm.motivo as motivo',
-        'm.responsableId as responsableId',
+        'm.id AS "id"',
+        'm.createdAt AS "fecha"',
+        'm.tipo AS "tipo"',
+        'm.cantidadKg AS "cantidadKg"',
+        'm.cantidadUnidades AS "cantidadUnidades"',
+        'm.referenciaId AS "referenciaId"',
+        'm.motivo AS "motivo"',
+        'm.responsableId AS "responsableId"',
 
-        'dep.id as depositoId',
-        'dep.nombre as depositoNombre',
+        'dep.id AS "depositoId"',
+        'dep.nombre AS "depositoNombre"',
 
-        'mp.id as loteMpId',
-        'mp.codigoLote as loteMpCodigo',
-        'mpMat.id as materiaPrimaId',
-        'mpMat.nombre as materiaPrimaNombre',
+        'mp.id AS "loteMpId"',
+        'mp.codigoLote AS "loteMpCodigo"',
+        'mpMat.id AS "materiaPrimaId"',
+        'mpMat.nombre AS "materiaPrimaNombre"',
 
-        'pf.id as lotePfId',
-        'pf.codigoLote as lotePfCodigo',
-        'pfProd.id as productoFinalId',
-        'pfProd.nombre as productoFinalNombre',
+        'pf.id AS "lotePfId"',
+        'pf.codigoLote AS "lotePfCodigo"',
+        'pfProd.id AS "productoFinalId"',
+        'pfProd.nombre AS "productoFinalNombre"',
 
-        'pres.id as presentacionId',
-        'pres.nombre as presentacionNombre',
+        'pres.id AS "presentacionId"',
+        'pres.nombre AS "presentacionNombre"',
 
-        'm.unidad_envasada_id as unidadEnvasadaId',
+        'm.unidad_envasada_id AS "unidadEnvasadaId"',
       ])
       .orderBy('m.createdAt', q.order ?? 'DESC')
       .offset(skip)
       .limit(limit);
+
 
     // 3) Count query (sin select custom, sin order/paginado)
     const countQb = baseQb.clone();

@@ -1005,6 +1005,34 @@ export class EmpaquesService {
 
       await stockPresRepo.save(stock);
 
+      const movRepo = trx.getRepository(StockMovimiento);
+      // 3.5) ✅ NUEVO: registrar movimiento de stock (MERMA_PFE)
+      // - cantidadKg y cantidadUnidades NEGATIVAS
+      // - referenciaId: id "lógico" de la operación (podés usar loteId/presentacionId o generar un uuid)
+      // - evidencia: metadata útil para auditoría
+      await movRepo.save(
+        movRepo.create({
+          tenantId,
+          tipo: TipoMovimiento.MERMA_PFE,
+          lotePF: lote,
+          deposito: dep,
+          presentacion: pres,
+          cantidadKg: -Number(totalKg ?? 0),
+          cantidadUnidades: -Number(totalUnidades ?? 0),
+          referenciaId: 'MERMA_PFE',
+          motivo: dto.motivo ?? `DESCARTE_UNIDADES -> ${dto.estadoDestino}`,
+          responsableId: usuarioId,
+          evidencia: {
+            estadoDestino: dto.estadoDestino,
+            cantidad: totalUnidades,
+            unidadIds: ids,
+            depositoId: dep.id,
+            presentacionId: pres.id,
+            loteId: lote.id,
+          },
+        }),
+      );
+
       // 4) Auditoría
       await this.auditoria.registrar(
         tenantId,

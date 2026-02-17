@@ -1,5 +1,5 @@
 // src/modules/empaques/dto/query-unidades-envasadas.dto.ts
-import { IsOptional, IsUUID, IsIn, IsInt, Min, IsBooleanString } from 'class-validator';
+import { IsOptional, IsUUID, IsIn, IsInt, Min, IsBooleanString, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class QueryUnidadesEnvasadasDto {
@@ -42,4 +42,13 @@ export class QueryUnidadesEnvasadasDto {
   @IsInt()
   @Min(0)
   unidadesOffset?: number;
+
+  // ✅ NUEVO: rango de fechas (producción de unidades = created_at)
+  @IsOptional()
+  @IsDateString()
+  fechaDesde?: string; // ISO (ej: 2026-02-01 o 2026-02-01T00:00:00.000Z)
+
+  @IsOptional()
+  @IsDateString()
+  fechaHasta?: string; // ISO
 }

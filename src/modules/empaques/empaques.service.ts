@@ -709,6 +709,11 @@ export class EmpaquesService {
       qb.andWhere('d.id = :depositoId', { depositoId: q.depositoId });
     if (q.estado) qb.andWhere('u.estado = :estado', { estado: q.estado });
 
+    // ✅ NUEVO: filtros por fecha de creación de unidad
+if (q.fechaDesde) qb.andWhere('u.created_at >= :fd', { fd: q.fechaDesde });
+if (q.fechaHasta) qb.andWhere('u.created_at <= :fh', { fh: q.fechaHasta });
+
+
     const gruposRaw = await qb
       .select([
         'l.id AS "loteId"',
@@ -777,6 +782,12 @@ export class EmpaquesService {
     // Reaplicamos filtros (por si vino estado)
     if (q.estado)
       unidadesQb.andWhere('u.estado = :estado', { estado: q.estado });
+
+
+    // ✅ NUEVO: reaplicamos rango de fechas al detalle
+if (q.fechaDesde) unidadesQb.andWhere('u.created_at >= :fd', { fd: q.fechaDesde });
+if (q.fechaHasta) unidadesQb.andWhere('u.created_at <= :fh', { fh: q.fechaHasta });
+
 
     // OR por combinaciones
     keys.forEach((k, idx) => {

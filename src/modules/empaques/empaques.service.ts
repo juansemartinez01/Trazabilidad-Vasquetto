@@ -710,8 +710,8 @@ export class EmpaquesService {
     if (q.estado) qb.andWhere('u.estado = :estado', { estado: q.estado });
 
     // ✅ NUEVO: filtros por fecha de creación de unidad
-if (q.fechaDesde) qb.andWhere('u.created_at >= :fd', { fd: q.fechaDesde });
-if (q.fechaHasta) qb.andWhere('u.created_at <= :fh', { fh: q.fechaHasta });
+if (q.fechaDesde) qb.andWhere('l.fecha_produccion >= :fd', { fd: q.fechaDesde });
+if (q.fechaHasta) qb.andWhere('l.fecha_produccion <= :fh', { fh: q.fechaHasta });
 
 
     const gruposRaw = await qb
@@ -785,8 +785,8 @@ if (q.fechaHasta) qb.andWhere('u.created_at <= :fh', { fh: q.fechaHasta });
 
 
     // ✅ NUEVO: reaplicamos rango de fechas al detalle
-if (q.fechaDesde) unidadesQb.andWhere('u.created_at >= :fd', { fd: q.fechaDesde });
-if (q.fechaHasta) unidadesQb.andWhere('u.created_at <= :fh', { fh: q.fechaHasta });
+if (q.fechaDesde) unidadesQb.andWhere('l.fecha_produccion >= :fd', { fd: q.fechaDesde });
+if (q.fechaHasta) unidadesQb.andWhere('l.fecha_produccion <= :fh', { fh: q.fechaHasta });
 
 
     // OR por combinaciones

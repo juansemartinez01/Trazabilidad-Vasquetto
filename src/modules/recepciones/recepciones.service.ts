@@ -53,11 +53,27 @@ export class RecepcionesService {
       });
       if (!dep) throw new NotFoundException('Depósito no encontrado');
 
-      // calcular fecha vencimiento
+      // Calcular fecha de vencimiento: prioridad a fecha exacta (remito/etiqueta) y fallback a cálculo por meses
+
       const fechaElab = new Date(item.fechaElaboracion);
-      const meses = item.mesesVencimiento ?? 24;
-      const fechaVto = new Date(fechaElab);
-      fechaVto.setMonth(fechaVto.getMonth() + meses);
+      if (Number.isNaN(fechaElab.getTime())) {
+        throw new BadRequestException('fechaElaboracion inválida');
+      }
+
+      let fechaVto: Date;
+
+      // 1) Si viene fecha exacta, se usa (source of truth del remito/etiqueta)
+      if (item.fechaVencimiento) {
+        fechaVto = new Date(item.fechaVencimiento);
+        if (Number.isNaN(fechaVto.getTime())) {
+          throw new BadRequestException('fechaVencimiento inválida');
+        }
+      } else {
+        // 2) Si no viene, se calcula por meses enteros (default 24)
+        const meses = item.mesesVencimiento ?? 24;
+        fechaVto = new Date(fechaElab);
+        fechaVto.setMonth(fechaVto.getMonth() + meses);
+      }
 
       const lote = this.loteRepo.create({
         tenantId,

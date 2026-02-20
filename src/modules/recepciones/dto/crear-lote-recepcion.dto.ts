@@ -32,6 +32,11 @@ export class CrearLoteRecepcionDto {
   @Min(1)
   mesesVencimiento?: number;
 
+  // ✅ NUEVO: fecha exacta de vencimiento (si existe en remito/etiqueta)
+  @IsOptional()
+  @IsDateString()
+  fechaVencimiento?: string;
+
   @IsNumber()
   @Min(0.1)
   cantidadKg: number;
